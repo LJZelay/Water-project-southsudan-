@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Extraction of the Sudd - Homepage Audit</title>
+    <link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=Inter:wght@900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/homepage.css">
+</head>
+<body>
+
+    <canvas id="three-canvas"></canvas>
+
+    <div id="farmer-speech" class="farmer-bubble">GET FIGHTING!</div>
+
+    <div id="ui-overlay">
+        <div class="warning-banner">
+            <svg class="warning-icon" viewBox="0 0 24 24">
+                <path d="M12 2L1 21h22L12 2zm1 14h-2v-2h2v2zm0-4h-2V8h2v4z"/>
+            </svg>
+            <span class="warning-text">BEWARE: COULD BE VIOLENT!</span>
+        </div>
+
+        <div class="title-container">
+            <h1 class="main-title">THE EXTRACTION OF THE SUDD</h1>
+            <div class="sub-title">A DIGITAL AUDIT OF INFRASTRUCTURAL VIOLENCE</div>
+        </div>
+
+        <button class="action-button" onclick="handleGetLearning()">
+            GET LEARNING NOW!
+        </button>
+
+        <div class="footer-hint">ARCHIVE ACCESS: GRANTED // SECTOR: SOUTH SUDAN</div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module" src="/js/homepage.js"></script>
+</body>
+</html>

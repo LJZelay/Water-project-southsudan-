@@ -1,0 +1,252 @@
+:root {
+    --bg-sky: #aebad0;
+    --floor-green: #5a7a40;
+    --ui-black: #000000;
+    --success-green: #4ade80; 
+    --urgent-yellow: #ffee00;
+    --game-font: 'Silkscreen', cursive;
+    --body-font: 'Inter', sans-serif;
+}
+
+body, html {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    min-height: 100%;
+    background-color: var(--bg-sky);
+    overflow-x: hidden;
+}
+
+/* 3D Canvas sits fixed in the background */
+#three-canvas {
+    position: fixed; 
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1;
+}
+
+/* --- UI OVERLAY --- */
+#archive-overlay {
+    position: relative;
+    z-index: 10;
+    width: 100%;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 30px;
+    box-sizing: border-box;
+}
+
+/* Warm Welcome Banner */
+.welcome-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--ui-black);
+    padding: 12px 24px;
+    border: 3px solid var(--success-green);
+    margin-bottom: 20px;
+    pointer-events: auto;
+    box-shadow: 0 0 20px rgba(74, 222, 128, 0.4);
+    max-width: 90%;
+    text-align: center;
+}
+
+.welcome-icon {
+    width: 24px;
+    height: 24px;
+    fill: var(--success-green);
+}
+
+.welcome-text {
+    color: var(--success-green);
+    font-family: var(--game-font);
+    font-size: 11px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    line-height: 1.4;
+}
+
+.welcome-copy {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+.welcome-subtext {
+    margin: 0;
+    color: var(--success-green);
+    font-family: var(--game-font);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+}
+
+.back-to-scene {
+    background: var(--ui-black);
+    color: var(--urgent-yellow);
+    border: 2px solid var(--urgent-yellow);
+    padding: 10px 18px;
+    font-family: var(--game-font);
+    font-size: 10px;
+    text-decoration: none;
+    margin-bottom: 16px;
+    box-shadow: 4px 4px 0px rgba(0,0,0,0.25);
+}
+
+.coming-soon-links {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.back-to-scene:hover {
+    background: var(--urgent-yellow);
+    color: var(--ui-black);
+}
+
+/* Roadmap Container */
+.coming-soon-box {
+    background: var(--ui-black);
+    border: 4px solid #fff;
+    padding: 30px;
+    max-width: 850px;
+    width: 100%;
+    pointer-events: auto;
+    box-shadow: 10px 10px 0px rgba(0,0,0,0.3);
+    text-align: left;
+    margin-top: 10px;
+    margin-bottom: 60px; 
+    position: relative;
+}
+
+.roadmap-header {
+    border-bottom: 2px solid rgba(255,255,255,0.2);
+    padding-bottom: 15px;
+    margin-bottom: 25px;
+}
+
+.roadmap-header h1 {
+    font-family: var(--body-font);
+    font-size: 36px;
+    font-weight: 900;
+    color: #fff;
+    margin: 0;
+    text-transform: uppercase;
+    letter-spacing: -1px;
+}
+
+/* Roadmap Grid */
+.roadmap {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 20px;
+    font-family: var(--body-font);
+}
+
+@media (min-width: 768px) {
+    .roadmap {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+.roadmap-item {
+    background: rgba(255,255,255,0.05);
+    border-left: 4px solid var(--urgent-yellow);
+    padding: 20px;
+    transition: transform 0.2s ease;
+}
+
+.roadmap-item:hover {
+    transform: translateY(-5px);
+    background: rgba(255,255,255,0.1);
+}
+
+.roadmap-id {
+    font-family: var(--game-font);
+    font-size: 9px;
+    color: var(--urgent-yellow);
+    display: block;
+    margin-bottom: 5px;
+}
+
+.roadmap-title {
+    color: #fff;
+    font-weight: 900;
+    font-size: 16px;
+    display: block;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+}
+
+.roadmap-desc {
+    font-size: 12px;
+    color: #aaa;
+    line-height: 1.5;
+}
+
+/* Feedback Footer */
+.feedback-cta {
+    margin-top: 30px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    background: var(--urgent-yellow);
+    padding: 25px;
+    border: 4px solid var(--ui-black);
+}
+
+@media (min-width: 650px) {
+    .feedback-cta {
+        flex-direction: row;
+        align-items: center;
+    }
+}
+
+.feedback-text {
+    font-family: var(--game-font);
+    font-size: 11px;
+    color: var(--ui-black);
+    font-weight: bold;
+    flex: 1;
+    line-height: 1.6;
+}
+
+.feedback-button {
+    background: var(--ui-black);
+    color: var(--urgent-yellow);
+    border: 2px solid var(--ui-black);
+    padding: 14px 28px;
+    font-family: var(--game-font);
+    font-size: 10px;
+    font-weight: bold;
+    cursor: pointer;
+    box-shadow: 4px 4px 0px rgba(0,0,0,0.3);
+    transition: all 0.1s;
+    text-decoration: none;
+    display: inline-block;
+    text-align: center;
+}
+
+.feedback-button:hover {
+    background: #fff;
+    color: #000;
+    transform: translate(-2px, -2px);
+    box-shadow: 6px 6px 0px rgba(0,0,0,0.3);
+}
+
+.footer-hint {
+    margin-top: auto;
+    margin-bottom: 40px;
+    color: var(--ui-black);
+    font-family: var(--game-font);
+    font-size: 9px;
+    opacity: 0.8;
+    text-transform: uppercase;
+    letter-spacing: 3px;
+}
