@@ -14,6 +14,7 @@ import {
   getBrowserLocation,
   getDefaultJongleiCoords,
   getLocationWeatherPayload,
+  requestBrowserLocation,
   startWeatherAutoRefresh
 } from './api.js';
 
@@ -22,6 +23,9 @@ let livePayload = null;
 let stopWeatherRefresh = null;
 let clockTimerId = null;
 let currentTimezone = 'Africa/Juba';
+let locationStatusNote = 'Using Jonglei default coordinates.';
+let activeCoords = getDefaultJongleiCoords();
+let locationMode = 'fixed';
 
 function isReloadNavigation() {
   const navEntry = performance.getEntriesByType('navigation')[0];
@@ -157,6 +161,9 @@ async function initApp() {
 
   // Setup metrics toggle
   setupMetricsToggle();
+
+  // Setup explicit geolocation opt-in prompt
+  setupUseMyLocationButton();
 
   // Setup intro start button
   setupIntroStartButton();
@@ -303,7 +310,8 @@ function updateMetrics(sceneData, liveData) {
 
   const apiStatusEl = document.getElementById('metric-api-status');
   if (apiStatusEl) {
-    apiStatusEl.textContent = liveData?.statusNote || 'Loading live APIs...';
+    const sourceNote = liveData?.statusNote || 'Loading live APIs...';
+    apiStatusEl.textContent = `${sourceNote} ${locationStatusNote}`.trim();
   }
 }
 
@@ -342,8 +350,59 @@ window.addEventListener('beforeunload', () => {
 
 async function initLiveApiData() {
   const locationResult = await getBrowserLocation().catch(() => null);
-  const coords = locationResult?.coords || getDefaultJongleiCoords();
+  locationStatusNote = locationResult?.reason || 'Unable to read browser location. Using Jonglei default coordinates.';
+  activeCoords = locationResult?.coords || getDefaultJongleiCoords();
+  locationMode = activeCoords?.label === 'Your location' ? 'browser' : 'fixed';
 
+  await refreshLivePayloadForCoords(activeCoords);
+  updateLocationButtonLabel();
+}
+
+function setupUseMyLocationButton() {
+  const locationButton = document.getElementById('use-my-location');
+  if (!locationButton) {
+    return;
+  }
+
+  locationButton.addEventListener('click', async () => {
+    locationButton.disabled = true;
+    const previousText = locationButton.textContent;
+    locationButton.textContent = 'Requesting...';
+
+    try {
+      if (locationMode === 'browser') {
+        locationMode = 'fixed';
+        activeCoords = getDefaultJongleiCoords();
+        locationStatusNote = 'Location tracking turned off. Using fixed Jonglei Canal coordinates.';
+      } else {
+        const result = await requestBrowserLocation();
+        locationStatusNote = result.reason;
+        activeCoords = result.coords || getDefaultJongleiCoords();
+        locationMode = activeCoords?.label === 'Your location' ? 'browser' : 'fixed';
+      }
+
+      await refreshLivePayloadForCoords(activeCoords);
+      updateLocationButtonLabel();
+    } catch (err) {
+      console.warn('Location opt-in flow failed:', err);
+      locationStatusNote = 'Unable to apply location update. Continuing with fixed Jonglei Canal coordinates.';
+      locationMode = 'fixed';
+      activeCoords = getDefaultJongleiCoords();
+      await refreshLivePayloadForCoords(activeCoords);
+      updateLocationButtonLabel();
+      updateMetrics(getScene(getCurrentSceneIndex()), livePayload);
+    } finally {
+      locationButton.disabled = false;
+      if (locationButton.textContent === 'Requesting...') {
+        locationButton.textContent = previousText;
+      }
+    }
+  });
+
+  updateLocationButtonLabel();
+}
+
+async function refreshLivePayloadForCoords(coords) {
   try {
     livePayload = await getLocationWeatherPayload(coords);
   } catch (err) {
@@ -352,15 +411,28 @@ async function initLiveApiData() {
   }
 
   applyLivePayloadToExperience(livePayload);
-  const currentScene = getScene(getCurrentSceneIndex());
-  updateMetrics(currentScene, livePayload);
+  updateMetrics(getScene(getCurrentSceneIndex()), livePayload);
+
+  if (stopWeatherRefresh) {
+    stopWeatherRefresh();
+  }
 
   stopWeatherRefresh = startWeatherAutoRefresh(coords, (payload) => {
     livePayload = payload;
     applyLivePayloadToExperience(livePayload);
-    const scene = getScene(getCurrentSceneIndex());
-    updateMetrics(scene, livePayload);
+    updateMetrics(getScene(getCurrentSceneIndex()), livePayload);
   });
+}
+
+function updateLocationButtonLabel() {
+  const locationButton = document.getElementById('use-my-location');
+  if (!locationButton) {
+    return;
+  }
+
+  locationButton.textContent = locationMode === 'browser'
+    ? 'Use Fixed Jonglei Location'
+    : 'Use My Location';
 }
 
 function applyLivePayloadToExperience(payload) {

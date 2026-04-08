@@ -229,11 +229,105 @@ function esriSatelliteTileUrl(lat, lon, zoom = 7) {
 }
 
 export async function getBrowserLocation() {
-  return {
+  const fixedResult = {
     ok: true,
-    reason: "Using fixed Jonglei Canal target coordinates.",
+    reason: 'Using fixed Jonglei Canal target coordinates.',
     coords: { ...JONGLEI_COORDS }
   };
+
+  if (!('geolocation' in navigator)) {
+    return {
+      ...fixedResult,
+      reason: 'Geolocation is not supported in this browser. Using fixed Jonglei Canal target coordinates.'
+    };
+  }
+
+  if (!navigator.permissions || !navigator.permissions.query) {
+    return {
+      ...fixedResult,
+      reason: 'Using fixed Jonglei Canal target coordinates (location permission status unavailable).'
+    };
+  }
+
+  try {
+    const permission = await navigator.permissions.query({ name: 'geolocation' });
+
+    if (permission.state === 'denied') {
+      return {
+        ...fixedResult,
+        reason: 'Location permission is denied. Using fixed Jonglei Canal target coordinates.'
+      };
+    }
+
+    if (permission.state !== 'granted') {
+      return {
+        ...fixedResult,
+        reason: 'Location permission not granted. Using fixed Jonglei Canal target coordinates.'
+      };
+    }
+
+    const position = await new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject, {
+        enableHighAccuracy: false,
+        timeout: 7000,
+        maximumAge: 5 * 60 * 1000
+      });
+    });
+
+    return {
+      ok: true,
+      reason: 'Location permission granted. Using your browser location.',
+      coords: {
+        lat: position.coords.latitude,
+        lon: position.coords.longitude,
+        label: 'Your location'
+      }
+    };
+  } catch (_error) {
+    return {
+      ...fixedResult,
+      reason: 'Unable to read browser location. Using fixed Jonglei Canal target coordinates.'
+    };
+  }
+}
+
+export async function requestBrowserLocation() {
+  if (!('geolocation' in navigator)) {
+    return {
+      ok: false,
+      reason: 'Geolocation is not supported in this browser. Using fixed Jonglei Canal target coordinates.',
+      coords: { ...JONGLEI_COORDS }
+    };
+  }
+
+  try {
+    const position = await new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject, {
+        enableHighAccuracy: false,
+        timeout: 7000,
+        maximumAge: 2 * 60 * 1000
+      });
+    });
+
+    return {
+      ok: true,
+      reason: 'Location enabled. Using your browser location.',
+      coords: {
+        lat: position.coords.latitude,
+        lon: position.coords.longitude,
+        label: 'Your location'
+      }
+    };
+  } catch (error) {
+    const denied = error && error.code === 1;
+    return {
+      ok: false,
+      reason: denied
+        ? 'Location permission denied. Continuing with fixed Jonglei Canal coordinates.'
+        : 'Could not access your location. Continuing with fixed Jonglei Canal coordinates.',
+      coords: { ...JONGLEI_COORDS }
+    };
+  }
 }
 
 export async function getLocationWeatherPayload(coords) {

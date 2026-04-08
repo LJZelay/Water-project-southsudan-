@@ -38,7 +38,7 @@
     <div id="canvas-container" class="canvas-container">
       <canvas id="three-canvas"></canvas>
       <!-- Fallback image (shown if WebGL unavailable) -->
-      <img id="fallback-image" class="fallback-image" alt="Scene visualization" style="display: none;">
+      <img id="fallback-image" class="fallback-image" alt="Fallback visualization of the current Jonglei scene when 3D rendering is unavailable.">
     </div>
 
     <!-- Collapsed State Label (visible when panel is closed) -->
@@ -161,6 +161,7 @@
       </div>
 
       <div class="metric-footer">
+        <button id="use-my-location" class="location-optin" type="button">Use My Location</button>
         <span id="metric-api-status">Loading live APIs...</span>
       </div>
     </div>

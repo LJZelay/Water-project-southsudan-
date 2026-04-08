@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 
-// --- GLOBAL TRANSITION LOGIC ---
-window.handleGetLearning = () => {
+function handleGetLearning() {
     const ui = document.getElementById('ui-overlay');
     ui.classList.add('fade-out');
     document.getElementById('three-canvas').style.filter = 'blur(15px) grayscale(1)';
@@ -9,7 +8,12 @@ window.handleGetLearning = () => {
     setTimeout(() => {
         window.location.href = '/experience.html?scene=0';
     }, 1000);
-};
+}
+
+const startJourneyBtn = document.getElementById('start-journey');
+if (startJourneyBtn) {
+    startJourneyBtn.addEventListener('click', handleGetLearning);
+}
 
 // --- THREE.JS SCENE SETUP ---
 const canvas = document.getElementById('three-canvas');
