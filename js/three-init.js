@@ -6,9 +6,11 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { isWebGLSupported, lerp, easeInOutCubic, clamp } from './utils.js';
+import { selectPersonWithDialogue, setHoveredPerson, getSceneState } from './sceneState.js';
 
 let scene, camera, renderer;
 let canvas;
+let externalThreeContext = null;
 let directionalLightRef = null;
 let ambientLightRef = null;
 let hemiLightRef = null;
@@ -20,10 +22,21 @@ let sceneObjects = {};
 let animationFrameId;
 let scene0Runtime = null;
 let scene1Runtime = null;
+let scene2Runtime = null;
+let scene3Runtime = null;
+let scene4Runtime = null;
+let scene5Runtime = null;
 let scene0Controls = null;
 let scene0LastFrameTime = performance.now();
 let scene0StartTime = scene0LastFrameTime;
 const SCENE1_WHEEL_ROTATION_SPEED = 1.35;
+const sceneClickRaycaster = new THREE.Raycaster();
+const sceneClickPointer = new THREE.Vector2();
+let hoveredDialogueTarget = null;
+
+export function setExternalThreeContext(context = null) {
+  externalThreeContext = context;
+}
 
 function createWeatherEffects() {
   const root = new THREE.Group();
@@ -397,9 +410,70 @@ function createRefinedEngineer(config = {}) {
     group.add(paper);
   }
 
-  group.userData = { kind: 'refined-engineer', hasTheodolite: !!config.hasTheodolite };
+  group.userData = { 
+    kind: 'refined-engineer', 
+    hasTheodolite: !!config.hasTheodolite,
+    body,
+    head,
+    hat,
+    leftLeg,
+    rightLeg,
+    torso: body,
+    leftArm: null,
+    rightArm: null
+  };
   return group;
 }
+
+function createKneelingEngineer() {
+  const group = new THREE.Group();
+  const engineer = createRefinedEngineer();
+  
+  // Wrap legs in pivot groups for kneeling pose
+  const leftLegPivot = new THREE.Group();
+  const rightLegPivot = new THREE.Group();
+  
+  // Get direct references to legs from userData
+  if (engineer.userData.leftLeg && engineer.userData.rightLeg) {
+    const leftLeg = engineer.userData.leftLeg;
+    const rightLeg = engineer.userData.rightLeg;
+    
+    // Remove legs from engineer
+    engineer.remove(leftLeg);
+    engineer.remove(rightLeg);
+    
+    // Set up pivot positions
+    leftLegPivot.position.copy(leftLeg.position);
+    rightLegPivot.position.copy(rightLeg.position);
+    
+    // Reset leg positions relative to pivots
+    leftLeg.position.set(0, -0.43, 0);
+    rightLeg.position.set(0, -0.43, 0);
+    
+    // Add legs to pivots
+    leftLegPivot.add(leftLeg);
+    rightLegPivot.add(rightLeg);
+    
+    // Add pivots to engineer
+    engineer.add(leftLegPivot);
+    engineer.add(rightLegPivot);
+    
+    // Apply kneeling pose
+    leftLegPivot.rotation.x = -1.5;
+    rightLegPivot.rotation.x = -1.5;
+  }
+  
+  // Bend torso forward
+  if (engineer.userData.torso) {
+    engineer.userData.torso.rotation.x = 1.2;
+  }
+  
+  group.add(engineer);
+  group.userData = { kind: 'kneeling-engineer' };
+  
+  return group;
+}
+
 
 function createTheodolite() {
   const tripod = new THREE.Group();
@@ -841,8 +915,8 @@ function buildScene1System() {
     for (let i = 0; i < 6 + (idx % 2); i += 1) {
       const shell = new THREE.Mesh(
         new THREE.SphereGeometry(0.06, 6, 6),
-        new THREE.MeshBasicMaterial({ color: 0xeeeeee })
-      );
+          new THREE.MeshBasicMaterial({ color: 0xeeeeee })
+          );
       shell.position.set((Math.random() - 0.5) * 0.8, 0, (Math.random() - 0.5) * 0.8);
       cluster.add(shell);
     }
@@ -897,6 +971,34 @@ function buildScene1System() {
   const bwe = createImmersiveBWE();
   bwe.position.set(0, 0, -20);
   root.add(bwe);
+
+// Dust particles rising from damaged machinery
+  const dustCount = 40;
+  const dustPositions = new Float32Array(dustCount * 3);
+  for (let i = 0; i < dustCount * 3; i += 3) {
+    dustPositions[i] = (Math.random() - 0.5) * 4 + 5;
+    dustPositions[i + 1] = Math.random() * 2 + 3;
+    dustPositions[i + 2] = (Math.random() - 0.5) * 4 + 12;
+  }
+  const dustGeo = new THREE.BufferGeometry();
+  dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPositions, 3));
+  const dustMat = new THREE.PointsMaterial({
+    color: 0xbbaa88,
+    size: 0.15,
+    transparent: true,
+    opacity: 0.35,
+    depthWrite: false
+  });
+  const dust = new THREE.Points(dustGeo, dustMat);
+  root.add(dust);
+
+  // Make the entire excavator clickable
+  bwe.userData.interactive = true;
+  bwe.userData.dialogue = [
+    "The excavator was silenced—not by failure, but by resistance.",
+    "When machines stopped, the land could breathe again."
+  ];
+  bwe.userData.dialogueId = 'scene5-excavator';
 
   const engineers = [];
   const engineerDeckPositions = [
@@ -1288,6 +1390,3497 @@ function updateScene1(deltaSeconds, elapsedTime) {
       cluster.rotation.y += deltaSeconds * 0.12;
     });
   }
+}
+
+class CrowdManager {
+  constructor(parent) {
+    this.parent = parent;
+    this.group = new THREE.Group();
+    this.people = [];
+    this.militaryMembers = [];
+    this.leaderMesh = null;
+    this.militaryGroup = null;
+    this.frontLineZ = -14;
+    this.frontLinePushback = 0.08;
+    this.sharedBanners = [];
+    this.tensionFlash = null;
+    this.isEscalating = false;
+    this.escalationSun = null;
+    this.escalationFill = null;
+    this.baseSunIntensity = 0;
+    this.baseFillIntensity = 0;
+    this.nextFlashTime = 0.9 + Math.random() * 0.9;
+    this.flashStartTime = -1;
+    this.flashEndTime = -1;
+    this.flashReactUntil = -1;
+    this.flashPeakIntensity = 0;
+    this.flashBurstDistance = 0;
+    this.flashSourceX = -4;
+    this.flashSourceZ = -19.6;
+    this.screenFlash = null;
+    this.lastUpdateTime = null;
+
+    // Shared low-poly assets keep memory usage and draw setup lightweight.
+    this.headGeometry = new THREE.SphereGeometry(0.2, 8, 8);
+    this.torsoGeometry = new THREE.BoxGeometry(0.5, 0.68, 0.26);
+    this.upperLimbGeometry = new THREE.CylinderGeometry(0.055, 0.06, 0.36, 6);
+    this.lowerLimbGeometry = new THREE.CylinderGeometry(0.05, 0.055, 0.34, 6);
+    this.defaultBodyMaterial = new THREE.MeshStandardMaterial({ color: 0x5b5a57, roughness: 0.86, metalness: 0.04 });
+    this.defaultSkinMaterial = new THREE.MeshStandardMaterial({ color: 0xa2836f, roughness: 0.9, metalness: 0.02 });
+    this.bannerStickGeometry = new THREE.CylinderGeometry(0.02, 0.02, 1.15, 5);
+    this.bannerPlaneGeometry = new THREE.PlaneGeometry(0.58, 0.34);
+    this.bannerStickMaterial = new THREE.MeshStandardMaterial({ color: 0x7a6a56, roughness: 0.9, metalness: 0.03 });
+    this.bannerPlaneMaterial = new THREE.MeshStandardMaterial({ color: 0xd7d4c6, roughness: 0.88, metalness: 0.02, side: THREE.DoubleSide });
+    this.sharedBannerTexts = ['SAVE THE SUDD', 'WATER IS LIFE', 'OUR LAND OUR FUTURE'];
+  }
+
+  createBannerTexture(text, useRedText = false) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      return null;
+    }
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = useRedText ? '#a22a1f' : '#111111';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 44px sans-serif';
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    return texture;
+  }
+
+  createSharedBanners() {
+    if (!Array.isArray(this.people) || this.people.length < 1) {
+      return;
+    }
+
+    const carriers = [];
+    const maxCarriers = 12;
+    const step = Math.max(2, Math.floor(this.people.length / maxCarriers));
+    for (let i = 0; i < this.people.length; i += step) {
+      carriers.push(this.people[i]);
+      if (carriers.length >= maxCarriers) {
+        break;
+      }
+    }
+
+    carriers.forEach((carrier, idx) => {
+      const text = this.sharedBannerTexts[idx % this.sharedBannerTexts.length];
+      const posterTexture = this.createBannerTexture(text, idx % 2 === 1);
+
+      const posterGroup = new THREE.Group();
+      const stick = new THREE.Mesh(this.bannerStickGeometry, this.bannerStickMaterial);
+      stick.position.y = 0.58;
+      posterGroup.add(stick);
+
+      // Place the poster at the top of the stick instead of center.
+      const posterBoard = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.46, 0.3),
+        new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          roughness: 0.84,
+          metalness: 0.02,
+          map: posterTexture,
+          transparent: true,
+          opacity: 0.62,
+          side: THREE.DoubleSide
+        })
+      );
+      posterBoard.position.set(0, 1.14, 0.035);
+      posterGroup.add(posterBoard);
+
+      this.group.add(posterGroup);
+      this.sharedBanners.push({
+        mesh: posterGroup,
+        board: posterBoard,
+        carrier,
+        handLocal: new THREE.Vector3(-0.24, 1.22, 0.18),
+        chestLift: 0.03,
+        forwardPush: 0.08,
+        offset: Math.random() * Math.PI * 2,
+        swaySpeed: 0.85 + Math.random() * 0.35,
+        swayAmount: 0.035 + Math.random() * 0.02
+      });
+    });
+  }
+
+  createHumanoid(options = {}) {
+    const person = new THREE.Group();
+
+    const torsoMaterial = options.torsoMaterial || this.defaultBodyMaterial;
+    const limbMaterial = options.limbMaterial || torsoMaterial;
+    const skinMaterial = options.skinMaterial || this.defaultSkinMaterial;
+
+    const torso = new THREE.Mesh(this.torsoGeometry, torsoMaterial);
+    torso.position.y = 1.15;
+    torso.name = 'torso';
+    person.add(torso);
+
+    const head = new THREE.Mesh(this.headGeometry, skinMaterial);
+    head.position.y = 1.62;
+    head.name = 'head';
+    person.add(head);
+
+    const leftArm = new THREE.Group();
+    leftArm.position.set(-0.3, 1.38, 0);
+    leftArm.name = 'leftArm';
+    const leftUpperArm = new THREE.Mesh(this.upperLimbGeometry, limbMaterial);
+    leftUpperArm.position.y = -0.18;
+    leftArm.add(leftUpperArm);
+    const leftElbow = new THREE.Group();
+    leftElbow.position.y = -0.36;
+    leftElbow.name = 'leftElbow';
+    const leftLowerArm = new THREE.Mesh(this.lowerLimbGeometry, limbMaterial);
+    leftLowerArm.position.y = -0.17;
+    leftElbow.add(leftLowerArm);
+    leftArm.add(leftElbow);
+    person.add(leftArm);
+
+    const rightArm = new THREE.Group();
+    rightArm.position.set(0.3, 1.38, 0);
+    rightArm.name = 'rightArm';
+    const rightUpperArm = new THREE.Mesh(this.upperLimbGeometry, limbMaterial);
+    rightUpperArm.position.y = -0.18;
+    rightArm.add(rightUpperArm);
+    const rightElbow = new THREE.Group();
+    rightElbow.position.y = -0.36;
+    rightElbow.name = 'rightElbow';
+    const rightLowerArm = new THREE.Mesh(this.lowerLimbGeometry, limbMaterial);
+    rightLowerArm.position.y = -0.17;
+    rightElbow.add(rightLowerArm);
+    rightArm.add(rightElbow);
+    person.add(rightArm);
+
+    const leftLeg = new THREE.Group();
+    leftLeg.position.set(-0.13, 0.82, 0);
+    leftLeg.name = 'leftLeg';
+    const leftUpperLeg = new THREE.Mesh(this.upperLimbGeometry, limbMaterial);
+    leftUpperLeg.position.y = -0.18;
+    leftLeg.add(leftUpperLeg);
+    const leftKnee = new THREE.Group();
+    leftKnee.position.y = -0.36;
+    leftKnee.name = 'leftKnee';
+    const leftLowerLeg = new THREE.Mesh(this.lowerLimbGeometry, limbMaterial);
+    leftLowerLeg.position.y = -0.17;
+    leftKnee.add(leftLowerLeg);
+    leftLeg.add(leftKnee);
+    person.add(leftLeg);
+
+    const rightLeg = new THREE.Group();
+    rightLeg.position.set(0.13, 0.82, 0);
+    rightLeg.name = 'rightLeg';
+    const rightUpperLeg = new THREE.Mesh(this.upperLimbGeometry, limbMaterial);
+    rightUpperLeg.position.y = -0.18;
+    rightLeg.add(rightUpperLeg);
+    const rightKnee = new THREE.Group();
+    rightKnee.position.y = -0.36;
+    rightKnee.name = 'rightKnee';
+    const rightLowerLeg = new THREE.Mesh(this.lowerLimbGeometry, limbMaterial);
+    rightLowerLeg.position.y = -0.17;
+    rightKnee.add(rightLowerLeg);
+    rightLeg.add(rightKnee);
+    person.add(rightLeg);
+
+    person.userData.torso = torso;
+    person.userData.head = head;
+    person.userData.leftArm = leftArm;
+    person.userData.rightArm = rightArm;
+    person.userData.leftElbow = leftElbow;
+    person.userData.rightElbow = rightElbow;
+    person.userData.leftLeg = leftLeg;
+    person.userData.rightLeg = rightLeg;
+    person.userData.leftKnee = leftKnee;
+    person.userData.rightKnee = rightKnee;
+    person.userData.velocity = new THREE.Vector3(0, 0, 0);
+
+    return person;
+  }
+
+  pickDialogueRole(movementRole = 'hold', type = 'confronting') {
+    if (movementRole === 'retreat') {
+      return 'villager';
+    }
+
+    if (movementRole === 'advance-stick') {
+      return 'organizer';
+    }
+
+    if (type === 'hands_up') {
+      return 'student';
+    }
+
+    const roll = Math.random();
+    if (roll < 0.34) return 'student';
+    if (roll < 0.72) return 'villager';
+    return 'organizer';
+  }
+
+  getDialogueLines(role) {
+    const dialogueMap = {
+      student: [
+        'We protested... and they opened fire on students.',
+        'We are students, but we will not stay silent.'
+      ],
+      villager: [
+        'It will drain the wetlands and destroy livelihoods.',
+        'This canal is digging our grave before we perish.',
+        'You cannot take our water and call it development.'
+      ],
+      organizer: [
+        'Stay together. Do not break the line.',
+        "They're pushing forward-hold your ground!",
+        "They're shooting-get back!"
+      ]
+    };
+
+    return dialogueMap[role] || dialogueMap.villager;
+  }
+
+  applyDialogueProfile(person, role) {
+    const safeRole = role === 'student' || role === 'organizer' ? role : 'villager';
+    person.userData.role = safeRole;
+    person.userData.dialogue = [...this.getDialogueLines(safeRole)];
+    person.userData.voiceIndex = 0;
+  }
+
+  setEscalating(active) {
+    this.isEscalating = !!active;
+  }
+
+  bindEscalationLighting(sun, fill) {
+    this.escalationSun = sun || null;
+    this.escalationFill = fill || null;
+    this.baseSunIntensity = sun ? sun.intensity : 0;
+    this.baseFillIntensity = fill ? fill.intensity : 0;
+  }
+
+  findClosestTarget(source, candidates) {
+    if (!source || !Array.isArray(candidates) || candidates.length === 0) {
+      return null;
+    }
+
+    let closest = null;
+    let closestDistSq = Infinity;
+    for (let i = 0; i < candidates.length; i += 1) {
+      const target = candidates[i];
+      if (!target || target === source) {
+        continue;
+      }
+      const dx = target.position.x - source.position.x;
+      const dz = target.position.z - source.position.z;
+      const distSq = dx * dx + dz * dz;
+      if (distSq < closestDistSq) {
+        closestDistSq = distSq;
+        closest = target;
+      }
+    }
+
+    return closest;
+  }
+
+  ensureVelocity(agent) {
+    if (!agent) {
+      return null;
+    }
+
+    if (!agent.userData) {
+      agent.userData = {};
+    }
+
+    if (!(agent.userData.velocity instanceof THREE.Vector3)) {
+      agent.userData.velocity = new THREE.Vector3(0, 0, 0);
+    }
+
+    return agent.userData.velocity;
+  }
+
+  integrateVelocity(agent, force, damping = 0.9, maxSpeed = 0.12) {
+    if (!agent) {
+      return;
+    }
+
+    const velocity = this.ensureVelocity(agent);
+    if (!velocity) {
+      return;
+    }
+
+    if (force) {
+      velocity.add(force);
+    }
+
+    if (velocity.lengthSq() > maxSpeed * maxSpeed) {
+      velocity.setLength(maxSpeed);
+    }
+
+    velocity.multiplyScalar(damping);
+    agent.position.add(velocity);
+  }
+
+  applySeparation(agent, neighbors, minDistance, strength, deltaTime, forceOut = null) {
+    if (!agent || !Array.isArray(neighbors) || deltaTime <= 0) {
+      return;
+    }
+
+    let pushX = 0;
+    let pushZ = 0;
+    for (let i = 0; i < neighbors.length; i += 1) {
+      const other = neighbors[i];
+      if (!other || other === agent) {
+        continue;
+      }
+
+      const dx = agent.position.x - other.position.x;
+      const dz = agent.position.z - other.position.z;
+      const distSq = dx * dx + dz * dz;
+      if (distSq < 1e-6) {
+        continue;
+      }
+
+      const dist = Math.sqrt(distSq);
+      if (dist >= minDistance) {
+        continue;
+      }
+
+      const overlap = (minDistance - dist) / minDistance;
+      pushX += (dx / dist) * overlap;
+      pushZ += (dz / dist) * overlap;
+    }
+
+    if (forceOut) {
+      forceOut.x += pushX * strength * deltaTime;
+      forceOut.z += pushZ * strength * deltaTime;
+      return;
+    }
+
+    const velocity = this.ensureVelocity(agent);
+    if (!velocity) {
+      return;
+    }
+
+    velocity.x += pushX * strength * deltaTime;
+    velocity.z += pushZ * strength * deltaTime;
+  }
+
+  keepInsideTerrain(agent, padding = 4) {
+    if (!agent) {
+      return;
+    }
+
+    const minX = -50 + padding;
+    const maxX = 50 - padding;
+    const minZ = -50 + padding;
+    const maxZ = 50 - padding;
+    const velocity = this.ensureVelocity(agent);
+    const clampedX = clamp(agent.position.x, minX, maxX);
+    const clampedZ = clamp(agent.position.z, minZ, maxZ);
+    if (velocity) {
+      if (clampedX !== agent.position.x) {
+        velocity.x = 0;
+      }
+      if (clampedZ !== agent.position.z) {
+        velocity.z = 0;
+      }
+    }
+    agent.position.x = clampedX;
+    agent.position.z = clampedZ;
+  }
+
+  keepWithinCrowdRadius(agent, centerX, centerZ, radius) {
+    if (!agent || !Number.isFinite(centerX) || !Number.isFinite(centerZ) || !Number.isFinite(radius) || radius <= 0) {
+      return;
+    }
+
+    const dx = agent.position.x - centerX;
+    const dz = agent.position.z - centerZ;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    if (dist <= radius || dist <= 1e-6) {
+      return;
+    }
+
+    const nx = dx / dist;
+    const nz = dz / dist;
+    agent.position.x = centerX + nx * radius;
+    agent.position.z = centerZ + nz * radius;
+    const velocity = this.ensureVelocity(agent);
+    if (velocity) {
+      const outward = velocity.x * nx + velocity.z * nz;
+      if (outward > 0) {
+        velocity.x -= nx * outward;
+        velocity.z -= nz * outward;
+      }
+    }
+  }
+
+  createMilitaryLine(count = 10, center = new THREE.Vector3(-4, 0, -8)) {
+    const militaryGroup = new THREE.Group();
+    this.militaryMembers = [];
+    const militaryBodyMaterial = new THREE.MeshStandardMaterial({ color: 0x2f3a33, roughness: 0.92, metalness: 0.04 });
+    const militaryLimbMaterial = new THREE.MeshStandardMaterial({ color: 0x32373b, roughness: 0.9, metalness: 0.04 });
+    const militaryHeadMaterial = new THREE.MeshStandardMaterial({ color: 0x5d5852, roughness: 0.92, metalness: 0.03 });
+    const helmetMaterial = new THREE.MeshStandardMaterial({ color: 0x2e3330, roughness: 0.88, metalness: 0.06 });
+    const rifleMaterial = new THREE.MeshStandardMaterial({ color: 0x2b2b2b, roughness: 0.86, metalness: 0.08 });
+    const spacing = 1.05;
+
+    for (let i = 0; i < count; i += 1) {
+      const figure = this.createHumanoid({
+        torsoMaterial: militaryBodyMaterial,
+        limbMaterial: militaryLimbMaterial,
+        skinMaterial: militaryHeadMaterial
+      });
+
+      if (figure.userData.torso) {
+        figure.userData.torso.scale.x = 1.28;
+      }
+
+      const helmet = new THREE.Mesh(this.headGeometry, helmetMaterial);
+      helmet.scale.set(1.04, 0.62, 1.04);
+      helmet.position.set(0, 1.78, 0);
+      figure.add(helmet);
+
+      const rifle = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.95), rifleMaterial);
+      rifle.position.set(0.22, 1.05, 0.26);
+      rifle.rotation.x = Math.PI / 2;
+      rifle.rotation.z = 0.1;
+      figure.add(rifle);
+
+      const muzzleFlash = new THREE.Mesh(
+        new THREE.SphereGeometry(0.06, 6, 6),
+        new THREE.MeshBasicMaterial({ color: 0xffa53d, transparent: true, opacity: 0 })
+      );
+      muzzleFlash.visible = false;
+      this.group.add(muzzleFlash);
+
+      const muzzleLight = new THREE.PointLight(0xffc35a, 0, 4.4, 2);
+      muzzleLight.visible = false;
+      this.group.add(muzzleLight);
+
+      // Firm stance: planted legs and a slight forward lean.
+      figure.rotation.x = -0.08;
+      if (figure.userData.leftLeg) figure.userData.leftLeg.rotation.x = 0;
+      if (figure.userData.rightLeg) figure.userData.rightLeg.rotation.x = 0;
+      if (figure.userData.leftKnee) figure.userData.leftKnee.rotation.x = 0;
+      if (figure.userData.rightKnee) figure.userData.rightKnee.rotation.x = 0;
+      if (figure.userData.leftArm) figure.userData.leftArm.rotation.x = -0.04;
+      if (figure.userData.rightArm) figure.userData.rightArm.rotation.x = -0.04;
+
+      figure.position.set(
+        center.x + (i - (count - 1) / 2) * spacing,
+        center.y,
+        center.z - 11.5
+      );
+      figure.rotation.y = Math.PI;
+      figure.userData.baseX = figure.position.x;
+      figure.userData.baseZ = figure.position.z;
+      figure.userData.stepOffset = Math.random() * Math.PI * 2;
+      figure.userData.patrolPhase = Math.random() * Math.PI * 2;
+      figure.userData.patrolRadius = 0.9 + Math.random() * 1.1;
+      figure.userData.rifle = rifle;
+      figure.userData.muzzleFlash = muzzleFlash;
+      figure.userData.muzzleLight = muzzleLight;
+      figure.userData.shotUntil = -1;
+      this.militaryMembers.push(figure);
+      militaryGroup.add(figure);
+    }
+
+    this.group.add(militaryGroup);
+    this.militaryGroup = militaryGroup;
+    const militaryLineZ = center.z - 11.5;
+    this.frontLineZ = militaryLineZ + 5.5;
+    this.militaryFocus = new THREE.Vector3(center.x, 0, militaryLineZ);
+
+    return militaryGroup;
+  }
+
+  createLeader(center = new THREE.Vector3(-4, 0, -8), platformAnchor = null) {
+    const leader = this.createHumanoid({
+      torsoMaterial: new THREE.MeshStandardMaterial({ color: 0x4d5157, roughness: 0.84, metalness: 0.06 }),
+      limbMaterial: new THREE.MeshStandardMaterial({ color: 0x44484d, roughness: 0.86, metalness: 0.05 }),
+      skinMaterial: new THREE.MeshStandardMaterial({ color: 0x9c7f67, roughness: 0.9, metalness: 0.02 })
+    });
+    this.applyDialogueProfile(leader, 'organizer');
+    const leaderHead = leader.userData.head;
+    const rightArm = leader.userData.rightArm;
+    const rightElbow = leader.userData.rightElbow;
+    const leftArm = leader.userData.leftArm;
+    const leftElbow = leader.userData.leftElbow;
+
+    const megaphoneGroup = new THREE.Group();
+    const shellMaterial = new THREE.MeshStandardMaterial({ color: 0xc8c6c1, roughness: 0.48, metalness: 0.45 });
+    const gripMaterial = new THREE.MeshStandardMaterial({ color: 0x202326, roughness: 0.82, metalness: 0.08 });
+    const accentMaterial = new THREE.MeshStandardMaterial({ color: 0xe48e2c, roughness: 0.5, metalness: 0.22, emissive: 0x5a2d09, emissiveIntensity: 0.18 });
+
+    const hornShell = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.132, 0.34, 14), shellMaterial);
+    hornShell.rotation.x = Math.PI / 2;
+    megaphoneGroup.add(hornShell);
+
+    const hornRim = new THREE.Mesh(new THREE.TorusGeometry(0.128, 0.012, 8, 20), accentMaterial);
+    hornRim.rotation.x = Math.PI / 2;
+    hornRim.position.z = 0.17;
+    megaphoneGroup.add(hornRim);
+
+    const rearCap = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 0.05, 12), shellMaterial);
+    rearCap.rotation.x = Math.PI / 2;
+    rearCap.position.z = -0.18;
+    megaphoneGroup.add(rearCap);
+
+    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.024, 0.19, 10), gripMaterial);
+    handle.position.set(0, -0.1, -0.02);
+    megaphoneGroup.add(handle);
+
+    const trigger = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.035, 0.02), accentMaterial);
+    trigger.position.set(0.01, -0.045, -0.045);
+    megaphoneGroup.add(trigger);
+
+    if (leaderHead) {
+      leaderHead.add(megaphoneGroup);
+      // Anchor the horn at the mouth so the leader appears to be speaking into it.
+      megaphoneGroup.position.set(0.15, -0.03, 0.25);
+      megaphoneGroup.rotation.set(-1.48, -0.04, 0.02);
+    }
+
+    if (platformAnchor) {
+      leader.position.set(platformAnchor.x, platformAnchor.y, platformAnchor.z);
+    } else {
+      leader.position.set(center.x + 0.4, center.y, center.z + 2.3);
+    }
+    leader.scale.setScalar(1.2);
+    leader.userData.type = 'leader';
+    leader.userData.offset = Math.random() * Math.PI * 2;
+    leader.userData.baseRotX = -0.09;
+    leader.userData.head = leaderHead;
+    leader.userData.platformAnchor = platformAnchor ? platformAnchor.clone() : null;
+    leader.userData.megaphone = megaphoneGroup;
+    leader.userData.dialogueId = 'scene2-leader';
+
+    // One-hand hold pose: right hand grips near mouth-level megaphone, left hand stays relaxed.
+    if (rightArm) {
+      rightArm.rotation.x = -1.5;
+      rightArm.rotation.z = -0.24;
+    }
+    if (rightElbow) rightElbow.rotation.x = 0.72;
+    if (leftArm) {
+      leftArm.rotation.x = 0.12;
+      leftArm.rotation.z = 0.04;
+    }
+    if (leftElbow) leftElbow.rotation.x = 0.12;
+
+    this.group.add(leader);
+    this.leaderMesh = leader;
+    return leader;
+  }
+
+  pickCrowdType() {
+    const roll = Math.random();
+    if (roll < 0.68) return 'confronting';
+    if (roll < 0.9) return 'hands_up';
+    if (roll < 0.96) return 'retreating';
+    return 'listening';
+  }
+
+  createCrowd(count = 40, center = new THREE.Vector3(-4, 0, -8), minRadius = 4, maxRadius = 6, leaderAnchor = null) {
+    const crowdClothingPalette = [0x5b5a57, 0x4f5d68, 0x5c5049, 0x4a5a50, 0x645755];
+    const clusterCount = Math.max(8, Math.floor(count / 3.5));
+    const clusterCenters = [];
+    for (let i = 0; i < clusterCount; i += 1) {
+      const t = i / clusterCount;
+      const clusterAngle = t * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
+      const radialMix = 0.3 + Math.random() * 0.7;
+      const clusterRadius = minRadius + (maxRadius - minRadius) * radialMix;
+      clusterCenters.push(new THREE.Vector3(
+        center.x + Math.cos(clusterAngle) * clusterRadius,
+        center.y,
+        center.z + Math.sin(clusterAngle) * clusterRadius
+      ));
+    }
+
+    this.crowdCenter = center.clone();
+    this.crowdContainmentRadius = Math.max(8.6, maxRadius + 3.5);
+
+    for (let i = 0; i < count; i += 1) {
+      const torsoColor = crowdClothingPalette[(Math.random() * crowdClothingPalette.length) | 0];
+      const limbColor = crowdClothingPalette[(Math.random() * crowdClothingPalette.length) | 0];
+      const person = this.createHumanoid({
+        torsoMaterial: new THREE.MeshStandardMaterial({ color: torsoColor, roughness: 0.86, metalness: 0.04 }),
+        limbMaterial: new THREE.MeshStandardMaterial({ color: limbColor, roughness: 0.88, metalness: 0.03 }),
+        skinMaterial: new THREE.MeshStandardMaterial({ color: 0xa2836f, roughness: 0.9, metalness: 0.02 })
+      });
+      const head = person.userData.head;
+
+      const cluster = clusterCenters[i % clusterCenters.length] || center;
+      const localAngle = Math.random() * Math.PI * 2;
+      const localRadius = 0.45 + Math.random() * 1.4;
+      const px = cluster.x + Math.cos(localAngle) * localRadius + (Math.random() - 0.5) * 0.22;
+      const pz = cluster.z + Math.sin(localAngle) * localRadius + (Math.random() - 0.5) * 0.22;
+      person.position.set(
+        px,
+        center.y,
+        pz
+      );
+      const forwardYaw = Math.atan2(center.x - px, this.frontLineZ - pz);
+      person.rotation.y = forwardYaw;
+
+      person.userData.type = this.pickCrowdType();
+      person.userData.offset = Math.random() * Math.PI * 2;
+      person.userData.baseY = person.position.y;
+      person.userData.baseX = person.position.x;
+      person.userData.baseZ = person.position.z;
+      person.userData.baseRotX = person.rotation.x;
+      person.userData.engageOffset = ((i % 7) - 3) * 0.32;
+      person.userData.targetMilitaryIndex = i % 10;
+      person.userData.roamPhase = Math.random() * Math.PI * 2;
+      person.userData.driftSpeed = 0.82 + Math.random() * 0.38;
+      person.userData.bobAmplitude = 0.025 + Math.random() * 0.02;
+      person.userData.bobSpeed = 1.1 + Math.random() * 0.5;
+      person.userData.retreatBackSpeed = 0.42 + Math.random() * 0.22;
+      person.userData.retreatTargetZ = person.userData.baseZ + (0.6 + Math.random() * 0.45);
+      const roleRoll = Math.random();
+      const movementRole = roleRoll < 0.25
+        ? 'advance-stick'
+        : (roleRoll < 0.5
+          ? 'retreat'
+          : (roleRoll < 0.85 ? 'raise-hands' : 'hold'));
+      person.userData.movementRole = movementRole;
+      person.userData.state = movementRole === 'advance-stick'
+        ? 'approaching'
+        : (movementRole === 'retreat' ? 'retreating' : 'holding');
+      person.userData.stateTimer = movementRole === 'retreat'
+        ? (0.6 + Math.random() * 1.2)
+        : ((movementRole === 'hold' || movementRole === 'raise-hands') ? (1.2 + Math.random() * 1.6) : 0);
+      if (movementRole === 'raise-hands') {
+        person.userData.type = 'hands_up';
+      }
+      person.userData.head = head;
+      person.userData.dialogueId = `scene2-person-${i}`;
+      this.applyDialogueProfile(person, this.pickDialogueRole(movementRole, person.userData.type));
+
+      if (movementRole === 'advance-stick' && person.userData.rightArm) {
+        const stick = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.012, 0.014, 1.06, 5),
+          new THREE.MeshStandardMaterial({ color: 0x7b6348, roughness: 0.92, metalness: 0.02 })
+        );
+        stick.position.set(0.04, -0.5, 0.02);
+        stick.rotation.z = -0.08;
+        person.userData.rightArm.add(stick);
+        person.userData.stick = stick;
+      }
+
+      this.group.add(person);
+      this.people.push(person);
+    }
+
+    this.createLeader(center, leaderAnchor);
+    this.createMilitaryLine(16, center);
+    this.createSharedBanners();
+
+    this.parent.add(this.group);
+    return this.group;
+  }
+
+  update(time) {
+    if (!Number.isFinite(time)) {
+      return;
+    }
+
+    const deltaTime = this.lastUpdateTime === null
+      ? 0
+      : Math.max(0, Math.min(time - this.lastUpdateTime, 0.1));
+    this.lastUpdateTime = time;
+
+    // Check for vehicle presence from React side; if a vehicle is near the front line escalate tensions.
+    try {
+      const sceneStateSnap = getSceneState ? getSceneState() : null;
+      if (sceneStateSnap && Number.isFinite(Number(sceneStateSnap.lastVehicleZ))) {
+        const z = Number(sceneStateSnap.lastVehicleZ);
+        if (z >= this.frontLineZ - 6 && z <= this.frontLineZ + 6) {
+          this.setEscalating(true);
+        } else {
+          this.setEscalating(false);
+        }
+      }
+    } catch (err) {
+      // ignore if getSceneState isn't available
+    }
+
+    if (time >= this.nextFlashTime) {
+      const duration = 0.14 + Math.random() * 0.12;
+      this.flashStartTime = time;
+      this.flashEndTime = time + duration;
+      this.flashReactUntil = this.flashEndTime + 0.36;
+      this.nextFlashTime = time + 0.8 + Math.random() * 0.9;
+
+      if (this.militaryMembers.length > 0) {
+        const shooterCount = Math.max(2, Math.floor(this.militaryMembers.length * 0.45));
+        for (let i = 0; i < shooterCount; i += 1) {
+          const pickIdx = (i * 2 + ((Math.random() * 3) | 0)) % this.militaryMembers.length;
+          const shooter = this.militaryMembers[pickIdx];
+          if (!shooter?.userData) {
+            continue;
+          }
+          const shotExtension = Math.random() * 0.08;
+          shooter.userData.shotUntil = Math.max(shooter.userData.shotUntil || -1, this.flashEndTime + shotExtension);
+        }
+      }
+    }
+
+    const flashActive = time < this.flashEndTime;
+    const crowdReactActive = time < this.flashReactUntil;
+    if (this.tensionFlash) this.tensionFlash.intensity = 0;
+    if (this.screenFlash) this.screenFlash.intensity = 0;
+
+    if (this.escalationSun || this.escalationFill) {
+      const sunTarget = this.isEscalating ? this.baseSunIntensity * 0.72 : this.baseSunIntensity;
+      const fillTarget = this.isEscalating ? this.baseFillIntensity * 0.78 : this.baseFillIntensity;
+      if (this.escalationSun) {
+        this.escalationSun.intensity += (sunTarget - this.escalationSun.intensity) * 0.06;
+      }
+      if (this.escalationFill) {
+        this.escalationFill.intensity += (fillTarget - this.escalationFill.intensity) * 0.06;
+      }
+    }
+
+    this.people.forEach((person, idx) => {
+      const data = person.userData || {};
+      const prevX = person.position.x;
+      const prevZ = person.position.z;
+      const isHovered = hoveredDialogueTarget === person;
+      const pulseScale = 1 + Math.sin(time * 2.1 + idx * 0.27) * 0.016;
+      const targetScale = isHovered ? 1.13 : pulseScale;
+      const nextScale = person.scale.x + (targetScale - person.scale.x) * 0.18;
+      person.scale.setScalar(nextScale);
+      const moveForce = new THREE.Vector3(0, 0, 0);
+      const velocity = this.ensureVelocity(person);
+      const addMove = (dx, dz, scale = 0.35) => {
+        moveForce.x += dx * scale;
+        moveForce.z += dz * scale;
+      };
+      const bob = Math.sin(time * (data.bobSpeed || 1.2) + (data.offset || 0)) * (data.bobAmplitude || 0.03);
+      const focusX = this.militaryFocus ? this.militaryFocus.x : -4;
+      const focusZ = this.militaryFocus ? this.militaryFocus.z : this.frontLineZ;
+      const desiredYaw = Math.atan2(focusX - person.position.x, focusZ - person.position.z);
+      const yawDelta = Math.atan2(
+        Math.sin(desiredYaw - person.rotation.y),
+        Math.cos(desiredYaw - person.rotation.y)
+      );
+      person.rotation.y += yawDelta * 0.16;
+
+      const assignedMilitary = this.militaryMembers.length > 0
+        ? this.militaryMembers[(data.targetMilitaryIndex || idx) % this.militaryMembers.length]
+        : null;
+      const closestMilitary = assignedMilitary || this.findClosestTarget(person, this.militaryMembers);
+      const dxToMilitary = closestMilitary ? (closestMilitary.position.x - person.position.x) : 0;
+      const dzToMilitary = closestMilitary ? (closestMilitary.position.z - person.position.z) : 0;
+      const distToMilitary = closestMilitary ? Math.sqrt(dxToMilitary * dxToMilitary + dzToMilitary * dzToMilitary) : Infinity;
+      const reactionMoveScale = crowdReactActive ? 0.14 : 1;
+      const movementRole = data.movementRole || 'hold';
+      const FRONT_LINE_Z = this.militaryFocus ? this.militaryFocus.z : this.frontLineZ;
+      if (!Number.isFinite(data.stateTimer)) {
+        data.stateTimer = 0;
+      }
+      if (data.stateTimer > 0) {
+        data.stateTimer = Math.max(0, data.stateTimer - deltaTime);
+      }
+      if (!data.state) {
+        data.state = 'approaching';
+      }
+
+      let stateChangedThisFrame = false;
+      const setState = (nextState, nextTimer = 0) => {
+        if (stateChangedThisFrame || data.stateTimer > 0 || data.state === nextState) {
+          return;
+        }
+        data.state = nextState;
+        data.stateTimer = nextTimer;
+        stateChangedThisFrame = true;
+      };
+
+      const toMilitaryX = distToMilitary > 1e-5 ? dxToMilitary / distToMilitary : 0;
+      const toMilitaryZ = distToMilitary > 1e-5 ? dzToMilitary / distToMilitary : 0;
+      const towardFront = FRONT_LINE_Z >= person.position.z ? 1 : -1;
+      const reachedFrontLine = towardFront > 0
+        ? person.position.z >= FRONT_LINE_Z - 1
+        : person.position.z <= FRONT_LINE_Z + 1;
+
+      if (data.state === 'approaching') {
+        const roleBoost = movementRole === 'advance-stick' ? 1 : 0.45;
+        const forwardForce = 0.012 * roleBoost * reactionMoveScale * (flashActive ? 0.5 : 1) * (this.isEscalating ? 0.72 : 1);
+        if (distToMilitary < Infinity && distToMilitary > 1e-5) {
+          addMove(toMilitaryX * forwardForce, toMilitaryZ * forwardForce, 1);
+        } else {
+          addMove(0, towardFront * forwardForce, 1);
+        }
+
+        if (reachedFrontLine) {
+          setState('holding', movementRole === 'advance-stick' ? 1.1 : 1.8);
+        }
+      } else if (data.state === 'holding') {
+        const idleScale = movementRole === 'hold' ? 0.25 : 1;
+        const idleX = (data.baseX || person.position.x) + Math.sin(time * 0.72 + (data.roamPhase || 0)) * (0.28 * idleScale);
+        const idleZ = (data.baseZ || person.position.z) + Math.cos(time * 0.7 + (data.roamPhase || 0)) * (0.16 * idleScale);
+        addMove((idleX - person.position.x) * 0.006, (idleZ - person.position.z) * 0.006, 1);
+
+        if (data.stateTimer <= 0) {
+          if (movementRole === 'retreat') {
+            setState('retreating', 1.8 + Math.random() * 1.1);
+          } else if (movementRole === 'advance-stick' && flashActive && Math.random() < 0.2) {
+            setState('retreating', 1.3 + Math.random() * 0.9);
+          }
+        }
+      } else if (data.state === 'retreating') {
+        const retreatForce = (movementRole === 'retreat' ? 0.016 : 0.012) * (flashActive ? 1.16 : 1);
+        const sideSign = Math.sin((data.offset || 0) + idx * 0.67) >= 0 ? 1 : -1;
+        addMove(-toMilitaryX * retreatForce, -toMilitaryZ * retreatForce, 1);
+        addMove(sideSign * retreatForce * 0.6, 0, 1);
+
+        if (data.stateTimer <= 0) {
+          setState('holding', movementRole === 'retreat' ? 0.8 : 0.4);
+        }
+      } else {
+        data.state = 'approaching';
+        data.stateTimer = 0;
+      }
+
+      if (data.state === 'holding') {
+        person.position.y = (data.baseY || 0) + bob * 0.25;
+      } else if (data.state === 'retreating') {
+        person.position.y = (data.baseY || 0) + bob * 0.45;
+      } else {
+        person.position.y = (data.baseY || 0) + bob * 0.4;
+      }
+
+      const protestTargetX = this.crowdCenter ? this.crowdCenter.x : -4;
+      const protestTargetZ = this.frontLineZ - 0.9;
+      const neighborRadius = 3.7;
+      const neighborRadiusSq = neighborRadius * neighborRadius;
+      let neighborCount = 0;
+      let avgPosX = 0;
+      let avgPosZ = 0;
+      let avgVelX = 0;
+      let avgVelZ = 0;
+      for (let i = 0; i < this.people.length; i += 1) {
+        const other = this.people[i];
+        if (!other || other === person) {
+          continue;
+        }
+
+        const dx = other.position.x - person.position.x;
+        const dz = other.position.z - person.position.z;
+        const distSq = dx * dx + dz * dz;
+        if (distSq > neighborRadiusSq || distSq < 1e-6) {
+          continue;
+        }
+
+        neighborCount += 1;
+        avgPosX += other.position.x;
+        avgPosZ += other.position.z;
+        const otherVelocity = this.ensureVelocity(other);
+        if (otherVelocity) {
+          avgVelX += otherVelocity.x;
+          avgVelZ += otherVelocity.z;
+        }
+      }
+
+      if (neighborCount > 0) {
+        avgPosX /= neighborCount;
+        avgPosZ /= neighborCount;
+        avgVelX /= neighborCount;
+        avgVelZ /= neighborCount;
+        const cohesionStrength = data.state === 'retreating' ? 0.0022 : 0.0048;
+        const alignmentStrength = data.state === 'retreating' ? 0.009 : 0.018;
+        addMove((avgPosX - person.position.x) * cohesionStrength, (avgPosZ - person.position.z) * cohesionStrength, 1);
+        addMove(
+          (avgVelX - (velocity ? velocity.x : 0)) * alignmentStrength,
+          (avgVelZ - (velocity ? velocity.z : 0)) * alignmentStrength,
+          1
+        );
+      }
+
+      if (data.state !== 'retreating' && movementRole !== 'hold') {
+        const tx = protestTargetX - person.position.x;
+        const tz = protestTargetZ - person.position.z;
+        const targetDist = Math.hypot(tx, tz);
+        if (targetDist > 1e-5) {
+          const targetStrength = movementRole === 'advance-stick'
+            ? (data.state === 'holding' ? 0.0012 : 0.0038)
+            : (data.state === 'holding' ? 0.0006 : 0.0014);
+          addMove((tx / targetDist) * targetStrength, (tz / targetDist) * targetStrength, 1);
+        }
+      }
+
+      const containCenterX = this.crowdCenter ? this.crowdCenter.x : -4;
+      const containCenterZ = this.frontLineZ - 0.9;
+      const containRadius = Number.isFinite(this.crowdContainmentRadius) ? this.crowdContainmentRadius : 7.5;
+      const fromContainX = person.position.x - containCenterX;
+      const fromContainZ = person.position.z - containCenterZ;
+      const containDist = Math.sqrt(fromContainX * fromContainX + fromContainZ * fromContainZ);
+      if (containDist > containRadius) {
+        const inwardX = -fromContainX / Math.max(1e-6, containDist);
+        const inwardZ = -fromContainZ / Math.max(1e-6, containDist);
+        const overflow = containDist - containRadius;
+        const containPull = Math.min(0.06, 0.012 + overflow * 0.01);
+        addMove(inwardX * containPull, inwardZ * containPull, 1);
+      }
+
+      person.rotation.x += ((data.baseRotX || 0) - person.rotation.x) * 0.08;
+      if (data.head) {
+        data.head.rotation.y = Math.sin(time * 0.6 + (data.offset || 0)) * 0.2;
+      }
+
+      this.applySeparation(person, this.people, 1.18, 3.5, deltaTime, moveForce);
+      this.applySeparation(person, this.militaryMembers, 1.05, 3.2, deltaTime, moveForce);
+
+      if (velocity) {
+        for (let i = 0; i < this.people.length; i += 1) {
+          const other = this.people[i];
+          if (!other || other === person) {
+            continue;
+          }
+
+          let dx = person.position.x - other.position.x;
+          let dz = person.position.z - other.position.z;
+          const distance = Math.sqrt(dx * dx + dz * dz);
+          if (distance <= 1e-6 || distance > 1.2) {
+            continue;
+          }
+
+          dx /= distance;
+          dz /= distance;
+          const strength = (1.2 - distance) * 0.02;
+          velocity.x += dx * strength;
+          velocity.z += dz * strength;
+        }
+      }
+
+      if (closestMilitary && distToMilitary < 0.9) {
+        const invDist = 1 / Math.max(0.001, distToMilitary);
+        addMove(
+          -dxToMilitary * invDist * deltaTime * 2.2,
+          -dzToMilitary * invDist * deltaTime * 2.2
+        );
+      }
+
+      this.integrateVelocity(person, moveForce, 0.9, 0.052);
+      if (movementRole === 'hold' && data.state === 'holding' && velocity) {
+        velocity.multiplyScalar(0.86);
+      }
+      this.keepInsideTerrain(person, 3.5);
+      this.keepWithinCrowdRadius(person, containCenterX, containCenterZ, containRadius + 0.8);
+
+      if (data.banner) {
+        data.banner.rotation.z = Math.sin(time * 1.1 + (data.bannerOffset || 0)) * 0.08;
+      }
+
+      const walkCycle = Math.sin(time * 4.2 + (data.offset || 0));
+      const moveDistance = Math.hypot(person.position.x - prevX, person.position.z - prevZ);
+      const moveStrength = deltaTime > 0 ? clamp(moveDistance / (deltaTime * 1.0), 0, 1) : 0;
+      const moving = moveStrength > 0.12;
+      const legSwing = moving ? walkCycle * (0.18 + moveStrength * 0.32) : 0;
+      const armSwing = moving ? -walkCycle * (0.12 + moveStrength * 0.2) : 0;
+      if (data.leftLeg) data.leftLeg.rotation.x = legSwing;
+      if (data.rightLeg) data.rightLeg.rotation.x = -legSwing;
+      if (data.leftKnee) data.leftKnee.rotation.x = Math.max(0, -legSwing * 0.45);
+      if (data.rightKnee) data.rightKnee.rotation.x = Math.max(0, legSwing * 0.45);
+      if (data.leftArm) data.leftArm.rotation.x = armSwing;
+      if (data.rightArm) data.rightArm.rotation.x = -armSwing;
+      if (data.leftElbow) data.leftElbow.rotation.x = Math.max(0, -armSwing * 0.25);
+      if (data.rightElbow) data.rightElbow.rotation.x = Math.max(0, armSwing * 0.25);
+
+      if (data.type === 'hands_up' || data.type === 'listening') {
+        const raiseWave = Math.sin(time * 2.3 + (data.offset || 0)) * 0.12;
+        if (data.leftArm) {
+          data.leftArm.rotation.x = -1.32 + raiseWave;
+          data.leftArm.rotation.z = 0.16;
+        }
+        if (data.rightArm) {
+          data.rightArm.rotation.x = -1.32 - raiseWave;
+          data.rightArm.rotation.z = -0.16;
+        }
+        if (data.leftElbow) data.leftElbow.rotation.x = 0.36 + Math.abs(raiseWave) * 0.5;
+        if (data.rightElbow) data.rightElbow.rotation.x = 0.36 + Math.abs(raiseWave) * 0.5;
+      }
+
+      if (crowdReactActive) {
+        const flinchWave = Math.sin(time * 42 + (data.offset || 0)) * 0.05;
+        person.rotation.x += ((-0.24 + flinchWave) - person.rotation.x) * 0.32;
+        if (data.leftArm) {
+          data.leftArm.rotation.x = -0.55 + flinchWave;
+          data.leftArm.rotation.z = 0.22;
+        }
+        if (data.rightArm) {
+          data.rightArm.rotation.x = -0.55 - flinchWave;
+          data.rightArm.rotation.z = -0.22;
+        }
+      }
+
+      if (movementRole === 'advance-stick') {
+        if (data.rightArm) {
+          data.rightArm.rotation.x = -1.45;
+          data.rightArm.rotation.z = -0.24;
+        }
+        if (data.rightElbow) data.rightElbow.rotation.x = 0.22;
+        if (data.leftArm) {
+          data.leftArm.rotation.x = -0.22 + Math.sin(time * 2.4 + (data.offset || 0)) * 0.08;
+          data.leftArm.rotation.z = 0.08;
+        }
+      } else if (movementRole === 'raise-hands') {
+        const raiseWave = Math.sin(time * 2.1 + (data.offset || 0)) * 0.08;
+        if (data.leftArm) {
+          data.leftArm.rotation.x = -1.38 + raiseWave;
+          data.leftArm.rotation.z = 0.2;
+        }
+        if (data.rightArm) {
+          data.rightArm.rotation.x = -1.38 - raiseWave;
+          data.rightArm.rotation.z = -0.2;
+        }
+        if (data.leftElbow) data.leftElbow.rotation.x = 0.54 + Math.abs(raiseWave) * 0.4;
+        if (data.rightElbow) data.rightElbow.rotation.x = 0.54 + Math.abs(raiseWave) * 0.4;
+      }
+
+      // Everyone keeps some visible hand/arm motion, even when mostly stationary.
+      if (!crowdReactActive) {
+        const armIdle = Math.sin(time * 2.5 + (data.offset || 0)) * 0.05;
+        const elbowIdle = Math.sin(time * 3.0 + (data.offset || 0) + 0.6) * 0.04;
+        if (movementRole === 'hold' || movementRole === 'retreat') {
+          if (data.leftArm) data.leftArm.rotation.x += armIdle;
+          if (data.rightArm) data.rightArm.rotation.x -= armIdle;
+          if (data.leftElbow) data.leftElbow.rotation.x = Math.max(0, data.leftElbow.rotation.x + elbowIdle);
+          if (data.rightElbow) data.rightElbow.rotation.x = Math.max(0, data.rightElbow.rotation.x - elbowIdle);
+        }
+      }
+
+      if (moving) {
+        const stepBounce = Math.abs(walkCycle) * 0.03;
+        person.position.y -= stepBounce;
+      }
+    });
+
+    if (Array.isArray(this.sharedBanners)) {
+      this.sharedBanners.forEach((entry) => {
+        const {
+          mesh,
+          board,
+          carrier,
+          offset,
+          swaySpeed,
+          swayAmount,
+          handLocal,
+          chestLift,
+          forwardPush
+        } = entry;
+        if (!mesh || !carrier) {
+          return;
+        }
+
+        const handWorld = carrier.localToWorld((handLocal || new THREE.Vector3(-0.24, 1.22, 0.18)).clone());
+        const carrierForward = new THREE.Vector3(0, 0, 1).applyQuaternion(carrier.quaternion);
+        handWorld.add(carrierForward.multiplyScalar(forwardPush || 0));
+        handWorld.y += chestLift || 0;
+
+        mesh.position.copy(handWorld);
+        mesh.rotation.y = carrier.rotation.y;
+        mesh.rotation.z = Math.sin(time * swaySpeed + offset) * swayAmount;
+
+        if (camera && board?.material) {
+          const cameraDistance = mesh.position.distanceTo(camera.position);
+          const hideDistance = 5;
+          const fadeDistance = 11;
+          const camForward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+          const toPoster = mesh.position.clone().sub(camera.position);
+          const toPosterLen = Math.max(1e-4, toPoster.length());
+          toPoster.multiplyScalar(1 / toPosterLen);
+          const inView = camForward.dot(toPoster) > 0.14;
+          const fade = clamp((cameraDistance - hideDistance) / (fadeDistance - hideDistance), 0, 1);
+
+          board.material.opacity = fade;
+          mesh.visible = inView && fade > 0.02;
+        }
+      });
+    }
+
+    if (this.leaderMesh) {
+      const leaderData = this.leaderMesh.userData || {};
+      const leaderHovered = hoveredDialogueTarget === this.leaderMesh;
+      const leaderPulse = 1.2 + Math.sin(time * 2.3 + (leaderData.offset || 0)) * 0.018;
+      const leaderTargetScale = leaderHovered ? 1.3 : leaderPulse;
+      const nextLeaderScale = this.leaderMesh.scale.x + (leaderTargetScale - this.leaderMesh.scale.x) * 0.2;
+      this.leaderMesh.scale.setScalar(nextLeaderScale);
+      if (leaderData.platformAnchor) {
+        const anchor = leaderData.platformAnchor;
+        this.leaderMesh.position.x += (anchor.x - this.leaderMesh.position.x) * 0.28;
+        this.leaderMesh.position.z += (anchor.z - this.leaderMesh.position.z) * 0.28;
+        this.leaderMesh.position.y = anchor.y + Math.sin(time * 1.7 + (leaderData.offset || 0)) * 0.015;
+        const leaderVelocity = this.ensureVelocity(this.leaderMesh);
+        if (leaderVelocity) {
+          leaderVelocity.set(0, 0, 0);
+        }
+        if (camera) {
+          const faceYaw = Math.atan2(camera.position.x - this.leaderMesh.position.x, camera.position.z - this.leaderMesh.position.z);
+          const yawDelta = Math.atan2(
+            Math.sin(faceYaw - this.leaderMesh.rotation.y),
+            Math.cos(faceYaw - this.leaderMesh.rotation.y)
+          );
+          this.leaderMesh.rotation.y += yawDelta * 0.22;
+        }
+      } else {
+        const leaderWanderX = (this.crowdCenter ? this.crowdCenter.x : this.leaderMesh.position.x) + Math.sin(time * 0.55 + (leaderData.offset || 0)) * 2.3;
+        const leaderWanderZ = (this.crowdCenter ? this.crowdCenter.y : this.leaderMesh.position.z) + 1.8 + Math.cos(time * 0.52 + (leaderData.offset || 0)) * 1.1;
+        const leaderForce = new THREE.Vector3(0, 0, 0);
+        const leaderBlend = Math.min(1, deltaTime * 1.3);
+        leaderForce.x += (leaderWanderX - this.leaderMesh.position.x) * leaderBlend * 0.35;
+        leaderForce.z += (leaderWanderZ - this.leaderMesh.position.z) * leaderBlend * 0.35;
+        this.integrateVelocity(this.leaderMesh, leaderForce, 0.9, 0.09);
+        this.keepInsideTerrain(this.leaderMesh, 4.5);
+      }
+      this.leaderMesh.rotation.x += ((leaderData.baseRotX || -0.08) - this.leaderMesh.rotation.x) * 0.08;
+      if (leaderData.head) {
+        leaderData.head.rotation.y = Math.sin(time * 0.9 + (leaderData.offset || 0)) * 0.35;
+      }
+    }
+
+    if (this.militaryGroup) {
+      const crowdFocusX = this.crowdCenter ? this.crowdCenter.x : -5;
+      const crowdFocusZ = this.frontLineZ + 0.6;
+
+      this.militaryMembers.forEach((soldier, idx) => {
+        const sData = soldier.userData || {};
+        const prevX = soldier.position.x;
+        const prevZ = soldier.position.z;
+        const soldierForce = new THREE.Vector3(0, 0, 0);
+        const linkedCrowd = this.people.length > 0
+          ? this.people[(idx * 3) % this.people.length]
+          : null;
+
+        const targetXRaw = linkedCrowd
+          ? linkedCrowd.position.x
+          : (sData.baseX || soldier.position.x) + Math.sin(time * 0.45 + (sData.patrolPhase || 0)) * (sData.patrolRadius || 1.2);
+        const desiredX = clamp(targetXRaw, crowdFocusX - 10, crowdFocusX + 10);
+        const engageBaseZ = this.frontLineZ - 2.8 + Math.cos(time * 0.5 + idx * 0.28) * 0.4;
+        const pulse = Math.sin(time * 0.85 + idx * 0.42) * 0.24;
+        const pressure = (flashActive ? 0.24 : 0) + (this.isEscalating ? 0.18 : 0);
+        const targetCrowdZ = linkedCrowd ? linkedCrowd.position.z : (this.frontLineZ + 0.9);
+        const desiredZ = clamp(Math.min(engageBaseZ + pulse + pressure, targetCrowdZ - 0.7), this.frontLineZ - 6, this.frontLineZ + 4);
+
+        soldierForce.x += (desiredX - soldier.position.x) * Math.min(1, deltaTime * 1.9) * 0.35;
+        soldierForce.z += (desiredZ - soldier.position.z) * Math.min(1, deltaTime * 1.7) * 0.35;
+
+        this.applySeparation(soldier, this.militaryMembers, 0.92, 2.7, deltaTime, soldierForce);
+        this.applySeparation(soldier, this.people, 1.05, 3.0, deltaTime, soldierForce);
+        this.integrateVelocity(soldier, soldierForce, 0.9, 0.1);
+        this.keepInsideTerrain(soldier, 3.2);
+
+        const desiredYaw = Math.atan2(crowdFocusX - soldier.position.x, crowdFocusZ - soldier.position.z);
+        const yawDelta = Math.atan2(
+          Math.sin(desiredYaw - soldier.rotation.y),
+          Math.cos(desiredYaw - soldier.rotation.y)
+        );
+        soldier.rotation.y += yawDelta * 0.18;
+        soldier.rotation.x += (-0.08 - soldier.rotation.x) * 0.12;
+
+        if (sData.rifle) {
+          const aimTarget = linkedCrowd
+            ? linkedCrowd.position.clone()
+            : new THREE.Vector3(crowdFocusX, 1.2, crowdFocusZ);
+          aimTarget.y = 1.2;
+          const localAimTarget = soldier.worldToLocal(aimTarget.clone());
+          sData.rifle.lookAt(localAimTarget);
+        }
+
+        if (sData.muzzleFlash && sData.muzzleLight && sData.rifle) {
+          const muzzleTip = sData.rifle.localToWorld(new THREE.Vector3(0, 0, 0.53));
+          sData.muzzleFlash.position.copy(muzzleTip);
+          sData.muzzleLight.position.copy(muzzleTip);
+
+          const firing = time < (sData.shotUntil || -1);
+          if (firing) {
+            const pulseOn = Math.sin(time * (95 + idx * 3)) > -0.18;
+            sData.muzzleFlash.visible = pulseOn;
+            sData.muzzleLight.visible = pulseOn;
+            if (pulseOn) {
+              sData.muzzleFlash.material.opacity = 0.72 + Math.random() * 0.22;
+              sData.muzzleLight.intensity = 2.4 + Math.random() * 2.2;
+            } else {
+              sData.muzzleFlash.material.opacity = 0;
+              sData.muzzleLight.intensity = 0;
+            }
+          } else {
+            sData.muzzleFlash.visible = false;
+            sData.muzzleFlash.material.opacity = 0;
+            sData.muzzleLight.visible = false;
+            sData.muzzleLight.intensity = 0;
+          }
+        }
+
+        const moveAmount = Math.hypot(soldier.position.x - prevX, soldier.position.z - prevZ);
+        const movePower = deltaTime > 0 ? clamp(moveAmount / (deltaTime * 0.7), 0, 1) : 0;
+        const march = Math.sin(time * 5.0 + (sData.stepOffset || 0));
+        const legSwing = march * (0.1 + movePower * 0.2);
+
+        if (sData.leftLeg) sData.leftLeg.rotation.x = legSwing;
+        if (sData.rightLeg) sData.rightLeg.rotation.x = -legSwing;
+        if (sData.leftKnee) sData.leftKnee.rotation.x = Math.max(0, -legSwing * 0.35);
+        if (sData.rightKnee) sData.rightKnee.rotation.x = Math.max(0, legSwing * 0.35);
+        if (sData.leftArm) sData.leftArm.rotation.x = -0.08 - march * 0.06;
+        if (sData.rightArm) sData.rightArm.rotation.x = -0.08 + march * 0.06;
+
+        soldier.position.y = Math.sin(time * 3.2 + idx * 0.7) * 0.01;
+      });
+    }
+  }
+}
+
+function buildScene2Environment() {
+  const root = new THREE.Group();
+  const crowdCenter = new THREE.Vector2(-5, -8);
+
+  const wetPatchSeeds = [
+    [-30, -33, 1.6],
+    [-8, -36, 1.2],
+    [14, -34, 1.4],
+    [30, -37, 1.3]
+  ];
+  const terrainBaseY = 0.04;
+
+  const pseudoNoise = (x, z) => {
+    const v = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453;
+    return (v - Math.floor(v)) - 0.5;
+  };
+
+  const getTerrainOffset = (x, z) => {
+    const rollingNoise = Math.sin(x * 0.16) * 0.016 + Math.cos(z * 0.13) * 0.014;
+    const crossNoise = Math.sin((x + z) * 0.07) * 0.01;
+    const microNoise = pseudoNoise(x * 0.4, z * 0.4) * 0.012;
+    let depression = 0;
+
+    wetPatchSeeds.forEach(([sx, sz, r]) => {
+      const dx = x - sx;
+      const dz = z - sz;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      const influenceRadius = r * 3.2;
+      if (dist < influenceRadius) {
+        const t = 1 - (dist / influenceRadius);
+        depression -= t * t * 0.055;
+      }
+    });
+
+    return rollingNoise + crossNoise + microNoise + depression;
+  };
+  const terrainYAt = (x, z) => terrainBaseY + getTerrainOffset(x, z);
+
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(100, 100, 64, 64),
+    new THREE.MeshStandardMaterial({
+      color: 0x69705c,
+      roughness: 0.9,
+      metalness: 0.05
+    })
+  );
+  const groundPos = ground.geometry.attributes.position;
+  for (let i = 0; i < groundPos.count; i += 1) {
+    const x = groundPos.getX(i);
+    const z = groundPos.getY(i);
+    groundPos.setZ(i, getTerrainOffset(x, z));
+  }
+  groundPos.needsUpdate = true;
+  ground.geometry.computeVertexNormals();
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.set(0, terrainBaseY, 0);
+  ground.receiveShadow = true;
+  root.add(ground);
+
+  const grassClusters = new THREE.Group();
+  const grassMaterial = new THREE.MeshStandardMaterial({ color: 0x58674b, roughness: 0.92, metalness: 0.01 });
+  const grassBladeGeometry = new THREE.CylinderGeometry(0.01, 0.016, 0.34, 5);
+  const grassPatchCount = 88;
+  for (let c = 0; c < grassPatchCount; c += 1) {
+    const angle = Math.random() * Math.PI * 2;
+    // Dense ring around crowd edge with lighter falloff farther away.
+    const edgeBias = Math.random() < 0.72;
+    const radius = edgeBias
+      ? 8 + Math.random() * 13
+      : 22 + Math.random() * 18;
+    const cx = crowdCenter.x + Math.cos(angle) * radius;
+    const cz = crowdCenter.y + Math.sin(angle) * radius;
+    const dist = Math.sqrt((cx - crowdCenter.x) * (cx - crowdCenter.x) + (cz - crowdCenter.y) * (cz - crowdCenter.y));
+    const edgeDensity = Math.max(0, 1 - Math.abs(dist - 14) / 12);
+    const farFalloff = Math.max(0.25, 1 - dist / 42);
+    const density = edgeDensity * 0.75 + farFalloff * 0.5;
+    const bladeCount = 4 + Math.floor(10 * density);
+
+    for (let i = 0; i < bladeCount; i += 1) {
+      const blade = new THREE.Mesh(grassBladeGeometry, grassMaterial);
+      const ox = (Math.random() - 0.5) * (0.5 + (1 - density) * 0.45);
+      const oz = (Math.random() - 0.5) * (0.5 + (1 - density) * 0.45);
+      const px = cx + ox;
+      const pz = cz + oz;
+      const bladeHeight = 0.26 + Math.random() * 0.26;
+      blade.scale.y = bladeHeight / 0.34;
+      blade.position.set(px, terrainYAt(px, pz) + bladeHeight * 0.5, pz);
+      blade.rotation.z = (Math.random() - 0.5) * 0.35;
+      blade.rotation.x = (Math.random() - 0.5) * 0.12;
+      grassClusters.add(blade);
+    }
+  }
+  root.add(grassClusters);
+
+  const trees = new THREE.Group();
+  const treeTrunkGeometry = new THREE.CylinderGeometry(0.14, 0.18, 1.85, 6);
+  const treeCanopyGeometry = new THREE.SphereGeometry(0.72, 8, 8);
+  const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x5a4634, roughness: 0.9, metalness: 0.02 });
+  const canopyMaterial = new THREE.MeshStandardMaterial({ color: 0x4d6444, roughness: 0.9, metalness: 0.01 });
+  const treeCount = 5 + Math.floor(Math.random() * 6);
+  for (let t = 0; t < treeCount; t += 1) {
+    // Keep trees in the far background to avoid crowd obstruction.
+    const tx = -42 + Math.random() * 84;
+    const tz = -48 + Math.random() * 12;
+    const ty = terrainYAt(tx, tz);
+
+    const tree = new THREE.Group();
+    const trunk = new THREE.Mesh(treeTrunkGeometry, trunkMaterial);
+    trunk.position.y = ty + 0.92;
+    tree.add(trunk);
+
+    const canopy = new THREE.Mesh(treeCanopyGeometry, canopyMaterial);
+    canopy.position.y = ty + 2.05;
+    canopy.scale.set(1 + Math.random() * 0.25, 0.9 + Math.random() * 0.2, 1 + Math.random() * 0.25);
+    tree.add(canopy);
+    trees.add(tree);
+  }
+  root.add(trees);
+
+  const waterPatches = new THREE.Group();
+  const waterMaterial = new THREE.MeshStandardMaterial({
+    color: 0x5f87a1,
+    roughness: 0.5,
+    metalness: 0.08,
+    transparent: true,
+    opacity: 0.5
+  });
+  const puddleAnchors = [];
+  const puddleCount = 24;
+  let createdPuddles = 0;
+  let attempts = 0;
+  while (createdPuddles < puddleCount && attempts < 260) {
+    attempts += 1;
+    const x = -45 + Math.random() * 90;
+    const z = -45 + Math.random() * 90;
+    const terrainOffset = getTerrainOffset(x, z);
+
+    // Keep puddles in naturally lower pockets so the scene reads as marshy land.
+    if (terrainOffset > -0.004) {
+      continue;
+    }
+
+    const radius = 1 + Math.random() * 3;
+    const patchGeom = new THREE.CircleGeometry(radius, 20);
+    const patchPos = patchGeom.attributes.position;
+    for (let i = 0; i < patchPos.count; i += 1) {
+      const px = patchPos.getX(i);
+      const py = patchPos.getY(i);
+      const radial = Math.min(1, Math.sqrt(px * px + py * py) / radius);
+      const bowl = -0.008 * (1 - radial * radial);
+      patchPos.setZ(i, bowl);
+    }
+    patchPos.needsUpdate = true;
+    patchGeom.computeVertexNormals();
+
+    const patch = new THREE.Mesh(patchGeom, waterMaterial);
+    patch.rotation.x = -Math.PI / 2;
+    patch.position.set(x, terrainYAt(x, z) + 0.05, z);
+    waterPatches.add(patch);
+    puddleAnchors.push({ x, z, radius });
+    createdPuddles += 1;
+  }
+  root.add(waterPatches);
+
+  const reeds = new THREE.Group();
+  const reedMaterial = new THREE.MeshStandardMaterial({
+    color: 0x5a6a4d,
+    roughness: 0.9,
+    metalness: 0.02
+  });
+  puddleAnchors.forEach((anchor, idx) => {
+    const reedCount = 5 + ((idx * 7) % 7);
+    for (let i = 0; i < reedCount; i += 1) {
+      const angle = (i / reedCount) * Math.PI * 2 + Math.random() * 0.5;
+      const spread = anchor.radius * (0.85 + Math.random() * 0.45);
+      const rx = anchor.x + Math.cos(angle) * spread;
+      const rz = anchor.z + Math.sin(angle) * spread;
+      const reedHeight = 0.9 + Math.random() * 1.1;
+      const reed = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.018, reedHeight, 5), reedMaterial);
+      reed.position.set(rx, terrainYAt(rx, rz) + reedHeight * 0.5, rz);
+      reed.rotation.z = (Math.random() - 0.5) * 0.2;
+      reed.castShadow = false;
+      reed.receiveShadow = false;
+      reeds.add(reed);
+    }
+  });
+  root.add(reeds);
+
+  const houses = new THREE.Group();
+  const houseCount = 6;
+  for (let i = 0; i < houseCount; i += 1) {
+    const home = createCircularHut({
+      wallColor: i % 2 === 0 ? 0xa88f66 : 0x9f865f,
+      roofColor: i % 3 === 0 ? 0x7d5735 : 0x8a633d,
+      accentColor: i % 2 === 0 ? 0x4f4337 : 0x655041,
+      wallRadius: 1.5 + (i % 2) * 0.16,
+      wallHeight: 1.85 + (i % 2) * 0.1,
+      roofHeight: 2.0 + (i % 3) * 0.08,
+      fenceCount: 6 + (i % 3)
+    });
+
+    const angle = i < 4
+      ? (-Math.PI * 0.78 + i * 0.24)
+      : (-Math.PI * 0.2 + (i - 4) * 0.5);
+    const radius = i < 4 ? (18 + i * 2.4) : (30 + i * 2.5);
+    const hx = crowdCenter.x + Math.cos(angle) * radius;
+    const hz = crowdCenter.y + Math.sin(angle) * radius;
+    const hy = terrainYAt(hx, hz);
+    home.position.set(hx, hy, hz);
+    home.rotation.y = Math.atan2(crowdCenter.x - hx, crowdCenter.y - hz);
+    home.scale.setScalar(0.58 + Math.random() * 0.12);
+    houses.add(home);
+  }
+  root.add(houses);
+
+  const speakerPlatform = new THREE.Group();
+  const platformX = crowdCenter.x + 1.3;
+  const platformZ = crowdCenter.y + 3.2;
+  const platformY = terrainYAt(platformX, platformZ);
+  const woodMaterial = new THREE.MeshStandardMaterial({ color: 0x6a503b, roughness: 0.9, metalness: 0.03 });
+  const platformTop = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.14, 1.4), woodMaterial);
+  platformTop.position.set(platformX, platformY + 0.28, platformZ);
+  speakerPlatform.add(platformTop);
+
+  const legOffsets = [
+    [-0.92, -0.55],
+    [0.92, -0.55],
+    [-0.92, 0.55],
+    [0.92, 0.55]
+  ];
+  legOffsets.forEach(([lx, lz]) => {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.42, 5), woodMaterial);
+    leg.position.set(platformX + lx, platformY + 0.06, platformZ + lz);
+    speakerPlatform.add(leg);
+  });
+  root.add(speakerPlatform);
+
+  const referenceLine = new THREE.Mesh(
+    new THREE.PlaneGeometry(82, 0.42),
+    new THREE.MeshBasicMaterial({
+      color: 0xe8ddb4,
+      transparent: true,
+      opacity: 0.2,
+      depthWrite: false
+    })
+  );
+  referenceLine.rotation.x = -Math.PI / 2;
+  referenceLine.position.set(0, terrainYAt(0, -4) + 0.02, -4);
+  root.add(referenceLine);
+
+  const sun = new THREE.DirectionalLight(0xd8bf97, 0.66);
+  sun.position.set(24, 34, 18);
+  root.add(sun);
+
+  const fill = new THREE.AmbientLight(0x8f7d67, 0.3);
+  root.add(fill);
+
+  const crowdManager = new CrowdManager(root);
+  const leaderAnchor = new THREE.Vector3(platformX, platformY + 0.36, platformZ);
+  crowdManager.createCrowd(34, new THREE.Vector3(-5, 0, -8), 5, 8, leaderAnchor);
+  crowdManager.bindEscalationLighting(sun, fill);
+
+  return {
+    root,
+    sun,
+    fill,
+    crowdManager,
+    previousFog: scene.fog
+  };
+}
+
+function applyScene2Environment() {
+  scene2Runtime = buildScene2Environment();
+  scene.add(scene2Runtime.root);
+  // Dusty near-ground atmosphere with slightly stronger fade in the distance.
+  scene.fog = new THREE.Fog(0x9f9385, 8, 54);
+}
+
+function getFourStateBlend(progress) {
+  const clamped = clamp(progress, 0, 1);
+  const scaled = clamped * 3;
+  const index = Math.min(2, Math.floor(scaled));
+  return {
+    index,
+    nextIndex: index + 1,
+    t: scaled - index
+  };
+}
+
+function createWetlandFish(config = {}) {
+  const fish = new THREE.Group();
+  const bodyColor = config.bodyColor || 0xa19b93;
+  const backColor = config.backColor || 0x7d766c;
+  const bellyColor = config.bellyColor || 0xb9b3aa;
+  const finColor = config.finColor || 0x9f988f;
+
+  const body = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.12, 0.46, 4, 8),
+    new THREE.MeshBasicMaterial({ color: bodyColor })
+  );
+  body.rotation.z = Math.PI / 2;
+  fish.add(body);
+
+  const back = new THREE.Mesh(
+    new THREE.BoxGeometry(0.24, 0.035, 0.4),
+    new THREE.MeshBasicMaterial({ color: backColor })
+  );
+  back.position.set(0.01, 0.07, 0);
+  back.rotation.z = Math.PI / 2;
+  fish.add(back);
+
+  const belly = new THREE.Mesh(
+    new THREE.BoxGeometry(0.22, 0.03, 0.28),
+    new THREE.MeshBasicMaterial({ color: bellyColor })
+  );
+  belly.position.set(-0.03, -0.07, 0);
+  fish.add(belly);
+
+  const tail = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.16, 0.16),
+    new THREE.MeshBasicMaterial({ color: finColor, side: THREE.DoubleSide })
+  );
+  tail.position.set(-0.31, 0, 0);
+  tail.rotation.y = Math.PI / 2;
+  tail.rotation.z = Math.PI / 2;
+  fish.add(tail);
+
+  const dorsal = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.07, 0.12),
+    new THREE.MeshBasicMaterial({ color: backColor, side: THREE.DoubleSide })
+  );
+  dorsal.position.set(0.04, 0.09, 0);
+  dorsal.rotation.x = -Math.PI / 2;
+  dorsal.rotation.z = -0.08;
+  fish.add(dorsal);
+
+  const pectoralLeft = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.05, 0.08),
+    new THREE.MeshBasicMaterial({ color: finColor, side: THREE.DoubleSide })
+  );
+  pectoralLeft.position.set(0.02, -0.01, 0.09);
+  pectoralLeft.rotation.x = -Math.PI / 2;
+  pectoralLeft.rotation.z = 0.45;
+  fish.add(pectoralLeft);
+
+  const pectoralRight = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.05, 0.08),
+    new THREE.MeshBasicMaterial({ color: finColor, side: THREE.DoubleSide })
+  );
+  pectoralRight.position.set(0.02, -0.01, -0.09);
+  pectoralRight.rotation.x = -Math.PI / 2;
+  pectoralRight.rotation.z = -0.45;
+  fish.add(pectoralRight);
+
+  const fadedStripe = new THREE.Mesh(
+    new THREE.BoxGeometry(0.24, 0.02, 0.06),
+    new THREE.MeshBasicMaterial({ color: 0x8f887f })
+  );
+  fadedStripe.position.set(0.01, 0.01, 0);
+  fish.add(fadedStripe);
+
+  fish.userData.baseOrientation = config.baseOrientation || new THREE.Euler(0, 0, 0);
+  fish.userData.twitchSeed = Math.random() * Math.PI * 2;
+  fish.userData.basePosition = config.basePosition ? config.basePosition.clone() : new THREE.Vector3();
+  fish.userData.baseRotX = 0;
+  fish.userData.baseRotZ = 0;
+  return fish;
+}
+
+function buildScene4System() {
+  const root = new THREE.Group();
+
+  const terrain = new THREE.Mesh(
+    new THREE.PlaneGeometry(100, 100, 64, 64),
+    new THREE.MeshStandardMaterial({
+      color: 0x8b7d3c,
+      roughness: 0.95,
+      metalness: 0.02
+    })
+  );
+  const terrainPos = terrain.geometry.attributes.position;
+  for (let i = 0; i < terrainPos.count; i += 1) {
+    const x = terrainPos.getX(i);
+    const z = terrainPos.getY(i);
+    const radial = Math.min(1, Math.hypot(x, z) / 50);
+    const humps = Math.sin(x * 0.12) * 0.25 + Math.cos(z * 0.1) * 0.2;
+    const edgeLift = radial * radial * 0.65;
+    terrainPos.setZ(i, -0.25 + humps + edgeLift);
+  }
+  terrainPos.needsUpdate = true;
+  terrain.geometry.computeVertexNormals();
+  terrain.rotation.x = -Math.PI / 2;
+  terrain.receiveShadow = true;
+  root.add(terrain);
+
+  const terrainYAt = (x, z) => {
+    const radial = Math.min(1, Math.hypot(x, z) / 50);
+    const humps = Math.sin(x * 0.12) * 0.25 + Math.cos(z * 0.1) * 0.2;
+    const edgeLift = radial * radial * 0.65;
+    return -0.25 + humps + edgeLift;
+  };
+
+  const poolSeeds = [
+    [-15, -18, 2.6],
+    [5, -15, 2.2],
+    [18, -9, 1.9],
+    [-28, 8, 2.4],
+    [12, 18, 2.8],
+    [26, -18, 1.8],
+    [-6, 10, 1.7]
+  ];
+
+  const vegetationStateDefs = [
+    {
+      grassColor: 0x5f8c3d,
+      density: 1,
+      grassHeight: 1,
+      grassLean: 0.1,
+      soilColor: 0x7d703f,
+      moistOpacity: 0.24,
+      bareOpacity: 0.08,
+      cropHeight: 1,
+      cropLean: 0.08,
+      cropPresence: 1
+    },
+    {
+      grassColor: 0x7a7d40,
+      density: 0.7,
+      grassHeight: 0.88,
+      grassLean: 0.2,
+      soilColor: 0x8a7b4f,
+      moistOpacity: 0.13,
+      bareOpacity: 0.28,
+      cropHeight: 0.82,
+      cropLean: 0.2,
+      cropPresence: 0.92
+    },
+    {
+      grassColor: 0x8d7f58,
+      density: 0.38,
+      grassHeight: 0.62,
+      grassLean: 0.38,
+      soilColor: 0x9b8a64,
+      moistOpacity: 0.04,
+      bareOpacity: 0.58,
+      cropHeight: 0.54,
+      cropLean: 0.52,
+      cropPresence: 0.56
+    },
+    {
+      grassColor: 0x8f8879,
+      density: 0.12,
+      grassHeight: 0.32,
+      grassLean: 0.56,
+      soilColor: 0xaaa08c,
+      moistOpacity: 0,
+      bareOpacity: 0.82,
+      cropHeight: 0.2,
+      cropLean: 0.84,
+      cropPresence: 0.12
+    }
+  ];
+
+  const waterStateDefs = [
+    {
+      color: 0x5d8798,
+      roughness: 0.24,
+      metalness: 0.2,
+      opacity: 0.64,
+      ripple: 0.08,
+      debris: 0.08,
+      film: 0.03,
+      algae: 0,
+      rim: 0.18,
+      waterlogged: 0.08
+    },
+    {
+      color: 0x4f6d6f,
+      roughness: 0.38,
+      metalness: 0.14,
+      opacity: 0.71,
+      ripple: 0.04,
+      debris: 0.32,
+      film: 0.16,
+      algae: 0.08,
+      rim: 0.35,
+      waterlogged: 0.18
+    },
+    {
+      color: 0x435145,
+      roughness: 0.52,
+      metalness: 0.08,
+      opacity: 0.82,
+      ripple: 0.016,
+      debris: 0.58,
+      film: 0.32,
+      algae: 0.3,
+      rim: 0.55,
+      waterlogged: 0.34
+    },
+    {
+      color: 0x2f3a34,
+      roughness: 0.66,
+      metalness: 0.03,
+      opacity: 0.92,
+      ripple: 0,
+      debris: 0.86,
+      film: 0.54,
+      algae: 0.62,
+      rim: 0.78,
+      waterlogged: 0.52
+    }
+  ];
+
+  const vegetationPatches = [];
+  const vegetationPatchCount = 72;
+  const vegetationRoot = new THREE.Group();
+  for (let i = 0; i < vegetationPatchCount; i += 1) {
+    const x = -46 + Math.random() * 92;
+    const z = -46 + Math.random() * 92;
+    const baseY = terrainYAt(x, z);
+    let nearestPoolDistance = Infinity;
+    poolSeeds.forEach(([px, pz]) => {
+      nearestPoolDistance = Math.min(nearestPoolDistance, Math.hypot(px - x, pz - z));
+    });
+    const nearWaterFactor = clamp(1 - (nearestPoolDistance / 18), 0, 1);
+    const patch = new THREE.Group();
+    patch.position.set(x, baseY + 0.01, z);
+
+    const moistDisk = new THREE.Mesh(
+      new THREE.CircleGeometry(0.8 + Math.random() * 0.45, 14),
+      new THREE.MeshStandardMaterial({
+        color: 0x6b6c42,
+        roughness: 0.95,
+        metalness: 0,
+        transparent: true,
+        opacity: 0.2,
+        depthWrite: false
+      })
+    );
+    moistDisk.rotation.x = -Math.PI / 2;
+    moistDisk.position.y = 0.008;
+    patch.add(moistDisk);
+
+    const barePatch = new THREE.Mesh(
+      new THREE.CircleGeometry(0.95 + Math.random() * 0.7, 14),
+      new THREE.MeshStandardMaterial({
+        color: 0x96856a,
+        roughness: 1,
+        metalness: 0,
+        transparent: true,
+        opacity: 0.12,
+        depthWrite: false
+      })
+    );
+    barePatch.rotation.x = -Math.PI / 2;
+    barePatch.rotation.z = Math.random() * Math.PI;
+    barePatch.position.y = 0.01;
+    patch.add(barePatch);
+
+    const blades = [];
+    const bladeCount = 9 + Math.floor(Math.random() * 8);
+    for (let b = 0; b < bladeCount; b += 1) {
+      const bladeHeight = 0.35 + Math.random() * 0.6;
+      const blade = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.012, 0.02, bladeHeight, 5),
+        new THREE.MeshStandardMaterial({ color: 0x6f9e41, roughness: 0.95, metalness: 0.01 })
+      );
+      blade.position.set(
+        (Math.random() - 0.5) * 1.9,
+        bladeHeight * 0.5,
+        (Math.random() - 0.5) * 1.9
+      );
+      blade.rotation.z = (Math.random() - 0.5) * 0.18;
+      blade.userData.baseHeight = bladeHeight;
+      blade.userData.resilience = Math.random();
+      blade.userData.bendPhase = Math.random() * Math.PI * 2;
+      patch.add(blade);
+      blades.push(blade);
+    }
+
+    const crop = new THREE.Group();
+    const cropHeight = 1 + Math.random() * 1.1;
+    const stem = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.06, 0.1, cropHeight, 6),
+      new THREE.MeshStandardMaterial({ color: 0x807462, roughness: 0.98, metalness: 0 })
+    );
+    stem.position.y = cropHeight * 0.5;
+    crop.add(stem);
+
+    const wiltHead = new THREE.Mesh(
+      new THREE.ConeGeometry(0.22 + Math.random() * 0.22, 0.6 + Math.random() * 0.5, 6),
+      new THREE.MeshStandardMaterial({ color: 0x8d867b, roughness: 1, metalness: 0 })
+    );
+    wiltHead.position.y = cropHeight * 0.95;
+    crop.add(wiltHead);
+
+    const sideShoots = [];
+    const shootCount = 1 + Math.floor(Math.random() * 3);
+    for (let s = 0; s < shootCount; s += 1) {
+      const shoot = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.02, 0.03, 0.5 + Math.random() * 0.45, 5),
+        new THREE.MeshStandardMaterial({ color: 0x7f7a6f, roughness: 1, metalness: 0 })
+      );
+      const side = s % 2 === 0 ? 1 : -1;
+      shoot.position.set(side * (0.11 + Math.random() * 0.1), 0.45 + s * 0.24, 0);
+      shoot.rotation.z = side * (0.42 + Math.random() * 0.2);
+      crop.add(shoot);
+      sideShoots.push(shoot);
+    }
+
+    crop.position.set((Math.random() - 0.5) * 0.9, 0, (Math.random() - 0.5) * 0.9);
+    crop.rotation.y = Math.random() * Math.PI;
+    patch.add(crop);
+
+    patch.userData.stateBias = (Math.random() - 0.5) * 0.35 + nearWaterFactor * 0.18;
+    patch.userData.nearWaterFactor = nearWaterFactor;
+    vegetationRoot.add(patch);
+
+    vegetationPatches.push({
+      patch,
+      moistDisk,
+      barePatch,
+      blades,
+      crop,
+      stem,
+      wiltHead,
+      sideShoots,
+      cropHeight,
+      dryThreshold: 0.22 + Math.random() * 0.5
+    });
+  }
+
+  root.add(vegetationRoot);
+
+  const stagnantPools = [];
+  const waterBodies = [];
+  const poolMatTemplate = new THREE.MeshStandardMaterial({
+    color: 0x4f6d6f,
+    roughness: 0.34,
+    metalness: 0.16,
+    transparent: true,
+    opacity: 0.74,
+    side: THREE.DoubleSide,
+    depthWrite: false
+  });
+  const deadFish = [];
+  const snailClusters = [];
+  const muddyFootprints = [];
+  const sparseEdgeVegetation = [];
+  poolSeeds.forEach(([x, z, r], idx) => {
+    const poolGeometry = new THREE.CircleGeometry(r, 28);
+    const poolPos = poolGeometry.attributes.position;
+    for (let p = 0; p < poolPos.count; p += 1) {
+      const px = poolPos.getX(p);
+      const py = poolPos.getY(p);
+      const angle = Math.atan2(py, px);
+      const radial = Math.sqrt((px * px) + (py * py));
+      const rimNoise = Math.sin(angle * (3.2 + (idx % 3))) * 0.14 + Math.cos(angle * 6.3 + idx) * 0.09;
+      const warped = Math.max(0.22, radial + rimNoise);
+      poolPos.setXY(p, Math.cos(angle) * warped, Math.sin(angle) * warped);
+    }
+    poolPos.needsUpdate = true;
+    poolGeometry.computeVertexNormals();
+
+    const mudRim = new THREE.Mesh(
+      poolGeometry,
+      new THREE.MeshStandardMaterial({
+        color: 0x5f503d,
+        roughness: 1,
+        metalness: 0,
+        transparent: true,
+        opacity: 0.26,
+        depthWrite: false
+      })
+    );
+    mudRim.rotation.x = -Math.PI / 2;
+    mudRim.scale.set(1.18, 1.18, 1);
+    mudRim.position.set(x, terrainYAt(x, z) + 0.015, z);
+    root.add(mudRim);
+
+    const waterloggedZone = new THREE.Mesh(
+      new THREE.CircleGeometry(r * (1.55 + Math.random() * 0.2), 18),
+      new THREE.MeshStandardMaterial({
+        color: 0x6f634e,
+        roughness: 1,
+        metalness: 0,
+        transparent: true,
+        opacity: 0.14,
+        depthWrite: false
+      })
+    );
+    waterloggedZone.rotation.x = -Math.PI / 2;
+    waterloggedZone.rotation.z = Math.random() * Math.PI;
+    waterloggedZone.position.set(x, terrainYAt(x, z) + 0.012, z);
+    root.add(waterloggedZone);
+
+    const pool = new THREE.Mesh(poolGeometry, poolMatTemplate.clone());
+    pool.rotation.x = -Math.PI / 2;
+    pool.position.set(x, terrainYAt(x, z) + 0.05, z);
+    pool.userData.interactive = true;
+    pool.userData.dialogue = [
+      'This water is trapped and warm now, perfect for parasite hosts.',
+      'Stagnation here raises disease risk for people and cattle alike.'
+    ];
+    pool.userData.dialogueId = `scene3-pool-${idx}`;
+    root.add(pool);
+    stagnantPools.push(pool);
+
+    const surfaceFilm = new THREE.Mesh(
+      poolGeometry,
+      new THREE.MeshStandardMaterial({
+        color: 0x768176,
+        roughness: 0.95,
+        metalness: 0,
+        transparent: true,
+        opacity: 0.06,
+        depthWrite: false
+      })
+    );
+    surfaceFilm.rotation.x = -Math.PI / 2;
+    surfaceFilm.scale.set(0.86, 0.86, 1);
+    surfaceFilm.position.set(x, terrainYAt(x, z) + 0.052, z);
+    root.add(surfaceFilm);
+
+    const algaePatches = new THREE.Group();
+    const algaeMaterials = [];
+    const algaeCount = 3 + (idx % 3);
+    for (let a = 0; a < algaeCount; a += 1) {
+      const algaeMaterial = new THREE.MeshStandardMaterial({
+        color: 0x53603e,
+        roughness: 0.96,
+        metalness: 0,
+        transparent: true,
+        opacity: 0.04,
+        depthWrite: false
+      });
+      const algae = new THREE.Mesh(
+        new THREE.CircleGeometry(0.22 + Math.random() * 0.28, 10),
+        algaeMaterial
+      );
+      algae.rotation.x = -Math.PI / 2;
+      algae.position.set(
+        x + (Math.random() - 0.5) * (r * 1.45),
+        terrainYAt(x, z) + 0.056,
+        z + (Math.random() - 0.5) * (r * 1.45)
+      );
+      algae.rotation.z = Math.random() * Math.PI;
+      root.add(algae);
+      algaePatches.add(algae);
+      algaeMaterials.push(algaeMaterial);
+    }
+
+    const debrisPieces = [];
+    const debrisCount = 5 + (idx % 3);
+    for (let d = 0; d < debrisCount; d += 1) {
+      const debris = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.18 + Math.random() * 0.18, 0.06 + Math.random() * 0.1),
+        new THREE.MeshStandardMaterial({
+          color: d % 2 === 0 ? 0x655845 : 0x574e3f,
+          roughness: 1,
+          metalness: 0,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.08,
+          depthWrite: false
+        })
+      );
+      debris.rotation.x = -Math.PI / 2;
+      debris.rotation.z = Math.random() * Math.PI;
+      debris.position.set(
+        x + (Math.random() - 0.5) * (r * 1.95),
+        terrainYAt(x, z) + 0.055,
+        z + (Math.random() - 0.5) * (r * 1.95)
+      );
+      root.add(debris);
+      debrisPieces.push(debris);
+    }
+
+    const edgeGrass = [];
+    const edgeBladeCount = 6 + Math.floor(Math.random() * 4);
+    for (let e = 0; e < edgeBladeCount; e += 1) {
+      const h = 0.2 + Math.random() * 0.45;
+      const blade = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.01, 0.018, h, 5),
+        new THREE.MeshStandardMaterial({ color: 0x6f7751, roughness: 0.95, metalness: 0.01 })
+      );
+      const angle = Math.random() * Math.PI * 2;
+      const edgeRadius = r * (1.25 + Math.random() * 0.55);
+      const gx = x + Math.cos(angle) * edgeRadius;
+      const gz = z + Math.sin(angle) * edgeRadius;
+      const groundY = terrainYAt(gx, gz);
+      blade.position.set(gx, groundY + h * 0.5, gz);
+      blade.rotation.z = (Math.random() - 0.5) * 0.35;
+      blade.userData.baseHeight = h;
+      blade.userData.resilience = Math.random();
+      blade.userData.baseGroundY = groundY;
+      root.add(blade);
+      edgeGrass.push(blade);
+    }
+    sparseEdgeVegetation.push(edgeGrass);
+
+    const footprintCount = 3 + (idx % 2);
+    for (let f = 0; f < footprintCount; f += 1) {
+      const footprint = new THREE.Mesh(
+        new THREE.CircleGeometry(0.13 + Math.random() * 0.09, 10),
+        new THREE.MeshStandardMaterial({
+          color: 0x574737,
+          roughness: 1,
+          metalness: 0,
+          transparent: true,
+          opacity: 0.09,
+          depthWrite: false
+        })
+      );
+      footprint.rotation.x = -Math.PI / 2;
+      footprint.scale.set(1, 0.65 + Math.random() * 0.25, 1);
+      const angle = Math.random() * Math.PI * 2;
+      const distance = r * (1.35 + Math.random() * 0.9);
+      const fx = x + Math.cos(angle) * distance;
+      const fz = z + Math.sin(angle) * distance;
+      footprint.position.set(fx, terrainYAt(fx, fz) + 0.02, fz);
+      footprint.rotation.z = angle + (Math.random() - 0.5) * 0.4;
+      root.add(footprint);
+      muddyFootprints.push(footprint);
+    }
+
+    const snailCluster = new THREE.Group();
+    const snailCount = 8 + (idx % 4);
+    for (let s = 0; s < snailCount; s += 1) {
+      const shell = new THREE.Mesh(
+        new THREE.SphereGeometry(0.1 + Math.random() * 0.06, 10, 10),
+        new THREE.MeshStandardMaterial({
+          color: 0xe6ded1,
+          roughness: 0.55,
+          metalness: 0.04
+        })
+      );
+      const body = new THREE.Mesh(
+        new THREE.CapsuleGeometry(0.05, 0.18, 3, 6),
+        new THREE.MeshStandardMaterial({
+          color: 0x3c3b36,
+          roughness: 0.92,
+          metalness: 0
+        })
+      );
+      const localX = (Math.random() - 0.5) * (r * 1.2);
+      const localZ = (Math.random() - 0.5) * (r * 1.2);
+      shell.position.set(localX, 0.08, localZ);
+      body.position.set(localX + 0.03, 0.05, localZ + 0.05);
+      body.rotation.z = Math.PI / 2;
+      snailCluster.add(shell);
+      snailCluster.add(body);
+    }
+    const snailBaseY = terrainYAt(x, z) + 0.16;
+    snailCluster.position.set(x, snailBaseY, z);
+    snailCluster.userData.baseY = snailBaseY;
+    snailCluster.userData.interactive = true;
+    snailCluster.userData.dialogue = [
+      'Snails multiply quickly around stagnant warm pools.',
+      'These freshwater snails carry the parasite lifecycle that raises schistosomiasis risk.'
+    ];
+    snailCluster.userData.dialogueId = `scene3-snail-cluster-${idx}`;
+    root.add(snailCluster);
+    snailClusters.push(snailCluster);
+
+    const fishCount = idx % 2 === 0 ? 1 : 2;
+    for (let i = 0; i < fishCount; i += 1) {
+      if (deadFish.length >= 8) {
+        break;
+      }
+      const fish = createWetlandFish({
+        bodyColor: idx % 3 === 0 ? 0xa9a39b : 0xa49e96,
+        backColor: idx % 2 === 0 ? 0x7b7469 : 0x6f675d,
+        bellyColor: idx % 2 === 0 ? 0xbeb8b1 : 0xaba59d,
+        finColor: 0x948b81
+      });
+      const fx = x + (Math.random() - 0.5) * (r * 4.8);
+      const fz = z + (Math.random() - 0.5) * (r * 4.8);
+      const baseY = terrainYAt(fx, fz) + 0.06;
+      fish.position.set(fx, baseY, fz);
+      const poseRoll = idx % 3 === 0 ? Math.PI : (idx % 3 === 1 ? Math.PI / 2 : -Math.PI / 2);
+      const posePitch = idx % 4 === 0 ? -0.08 : (idx % 4 === 1 ? 0.1 : -0.04);
+      fish.rotation.set(posePitch, Math.random() * Math.PI, poseRoll);
+      fish.userData.interactive = true;
+      fish.userData.dialogue = [
+        'Fish are stranded outside water and flopping for oxygen.',
+        'As pools shrink and oxygen drops, fish die in plain sight, signaling ecological collapse.'
+      ];
+      fish.userData.dialogueId = `scene3-dead-fish-${deadFish.length}`;
+      fish.userData.flopSeed = Math.random() * Math.PI * 2;
+      fish.userData.flopBaseY = fish.position.y;
+      fish.userData.flopBaseRotX = fish.rotation.x;
+      fish.userData.flopBaseRotZ = fish.rotation.z;
+      fish.userData.pollutionBias = 0.38 + Math.random() * 0.55;
+      root.add(fish);
+      deadFish.push(fish);
+    }
+
+    waterBodies.push({
+      pool,
+      mudRim,
+      waterloggedZone,
+      surfaceFilm,
+      algaeMaterials,
+      debrisPieces,
+      edgeGrass,
+      stateBias: (Math.random() - 0.5) * 0.2 + (idx / poolSeeds.length) * 0.35
+    });
+  });
+
+  const crackedSoil = [];
+  const crackSeeds = [
+    [-30, -18], [-20, -2], [-11, 6], [-2, -10], [8, -3], [16, 7], [23, 3], [-30, 14], [30, 14], [34, -4], [2, 22], [-12, 20], [26, 20]
+  ];
+  crackSeeds.forEach(([x, z], idx) => {
+    const crack = new THREE.Mesh(
+      new THREE.PlaneGeometry(3 + Math.random() * 2.5, 0.28 + Math.random() * 0.2),
+      new THREE.MeshStandardMaterial({ color: 0x3f2b15, roughness: 1, metalness: 0 })
+    );
+    crack.rotation.x = -Math.PI / 2;
+    crack.rotation.z = Math.random() * Math.PI;
+    crack.position.set(x, terrainYAt(x, z) + 0.03, z);
+    crack.userData.interactive = true;
+    crack.userData.dialogue = [
+      'The soil crust is hardening and losing fertility.',
+      'Without seasonal wet cycles, this ground cannot recover.'
+    ];
+    crack.userData.dialogueId = `scene3-cracked-soil-${idx}`;
+    root.add(crack);
+    crackedSoil.push(crack);
+
+    const dryPlate = new THREE.Mesh(
+      new THREE.CircleGeometry(1.2 + Math.random() * 1.5, 14),
+      new THREE.MeshStandardMaterial({ color: 0xb7a983, roughness: 0.98, metalness: 0 })
+    );
+    dryPlate.rotation.x = -Math.PI / 2;
+    dryPlate.rotation.z = Math.random() * Math.PI;
+    dryPlate.position.set(x + (Math.random() - 0.5) * 1.5, terrainYAt(x, z) + 0.015, z + (Math.random() - 0.5) * 1.5);
+    root.add(dryPlate);
+  });
+
+  const pollutedTrees = [];
+  for (let i = 0; i < 26; i += 1) {
+    const tx = -44 + Math.random() * 88;
+    const tz = -42 + Math.random() * 84;
+    const tree = new THREE.Group();
+    const trunk = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.16, 0.22, 2.6 + Math.random() * 1.8, 6),
+      new THREE.MeshStandardMaterial({ color: 0x4e4a45, roughness: 0.95, metalness: 0.02 })
+    );
+    trunk.position.y = terrainYAt(tx, tz) + 1.3;
+    tree.add(trunk);
+
+    const canopy = new THREE.Mesh(
+      new THREE.SphereGeometry(0.9 + Math.random() * 0.7, 8, 8),
+      new THREE.MeshStandardMaterial({ color: i % 2 === 0 ? 0x696a69 : 0x787674, roughness: 0.92, metalness: 0.01 })
+    );
+    canopy.position.y = trunk.position.y + 1.2;
+    canopy.scale.set(1.15, 0.75, 1.1);
+    tree.add(canopy);
+
+    tree.position.set(tx, 0, tz);
+    tree.rotation.y = Math.random() * Math.PI * 2;
+    tree.userData.interactive = true;
+    tree.userData.dialogue = [
+      'These trees are stressed, grey, and thinning under polluted conditions.',
+      'Loss of clean seasonal water and soil quality weakens tree health and reduces local shade and habitat.'
+    ];
+    tree.userData.dialogueId = `scene3-polluted-tree-${i}`;
+    root.add(tree);
+    pollutedTrees.push(tree);
+  }
+
+  const weakCows = [];
+  const cowSeeds = [
+    [-10, 0.05, -8],
+    [0, 0.05, -8],
+    [10, 0.05, -8],
+    [20, 0.05, -8]
+  ];
+  cowSeeds.forEach((seed, idx) => {
+    const cow = createCow({
+      group: idx % 2 === 0 ? 'Dinka' : 'Nuer',
+      direction: idx % 2 === 0 ? 1 : -1,
+      grazeSpeed: 0.16,
+      driftSpeed: 0.02
+    });
+    cow.position.set(seed[0], terrainYAt(seed[0], seed[2]) + seed[1], seed[2]);
+    cow.scale.setScalar(0.8);
+    cow.userData.interactive = true;
+    cow.userData.dialogue = [
+      'These herds are weaker each season as grazing routes shrink.',
+      'Pastoral mobility is breaking under fragmented water access.'
+    ];
+    cow.userData.dialogueId = `scene3-cow-${idx}`;
+    root.add(cow);
+    weakCows.push(cow);
+  });
+
+  const hutSeeds = [
+    [-30, -20], [-25, -10], [-20, 0],
+    [25, -20], [30, -10], [20, 0]
+  ];
+  hutSeeds.forEach((seed, idx) => {
+    const hut = createCircularHut({
+      wallColor: 0x8b7d5a,
+      roofColor: 0x6b5a3e,
+      accentColor: idx % 2 === 0 ? 0x5a4f39 : 0x4c4330,
+      wallRadius: 1.6 + (idx % 2) * 0.2,
+      wallHeight: 1.8,
+      roofHeight: 1.95,
+      fenceCount: 6
+    });
+    const x = seed[0];
+    const z = seed[1];
+    hut.position.set(x, terrainYAt(x, z), z);
+    hut.rotation.y = Math.atan2(-x, -z);
+    hut.scale.setScalar(0.95);
+    root.add(hut);
+  });
+
+  const canal = new THREE.Group();
+  canal.position.z = 38;
+  const canalWallMat = new THREE.MeshStandardMaterial({ color: 0x5a4a3a, roughness: 0.92, metalness: 0.04 });
+  const canalBedMat = new THREE.MeshStandardMaterial({ color: 0x4a3b2f, roughness: 0.98, metalness: 0.01 });
+
+  const northWall = new THREE.Mesh(new THREE.BoxGeometry(80, 2, 0.3), canalWallMat);
+  northWall.position.set(0, terrainYAt(0, 38) + 0.95, 1.75);
+  canal.add(northWall);
+
+  const southWall = new THREE.Mesh(new THREE.BoxGeometry(80, 2, 0.3), canalWallMat);
+  southWall.position.set(0, terrainYAt(0, 38) + 0.95, -1.75);
+  canal.add(southWall);
+
+  const bed = new THREE.Mesh(new THREE.PlaneGeometry(80, 3.5), canalBedMat);
+  bed.rotation.x = -Math.PI / 2;
+  bed.position.set(0, terrainYAt(0, 38) - 2, 0);
+  canal.add(bed);
+
+  const rockMat = new THREE.MeshStandardMaterial({ color: 0x706050, roughness: 0.95, metalness: 0.02 });
+  for (let i = 0; i < 20; i += 1) {
+    const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.22 + Math.random() * 0.15, 0), rockMat);
+    rock.position.set(-38 + Math.random() * 76, terrainYAt(0, 38) - 1.85 + Math.random() * 0.35, -1.3 + Math.random() * 2.6);
+    canal.add(rock);
+  }
+
+  canal.userData.interactive = true;
+  canal.userData.dialogue = [
+    'This trench imposed engineered flow where seasonal movement once dominated.',
+    'Canal geometry disrupted ecology, migration, and local health systems together.'
+  ];
+  canal.userData.dialogueId = 'scene3-canal';
+  root.add(canal);
+
+  const blockedPathMarker = new THREE.Mesh(
+    new THREE.PlaneGeometry(2, 2),
+    new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide })
+  );
+  blockedPathMarker.rotation.x = -Math.PI / 2;
+  blockedPathMarker.position.set(0, terrainYAt(0, 36) + 0.05, 36);
+  blockedPathMarker.visible = false;
+  blockedPathMarker.userData.interactive = true;
+  blockedPathMarker.userData.dialogue = [
+    'The old migration corridor is blocked by canal infrastructure.',
+    'Movement restrictions amplify conflict, hunger, and disease exposure.'
+  ];
+  blockedPathMarker.userData.dialogueId = 'scene3-blocked-path';
+  root.add(blockedPathMarker);
+
+  const pastoralist = createNiloticHuman({ group: 'Dinka', role: 'pastoralist', direction: 1 });
+  pastoralist.position.set(-15, terrainYAt(-15, -15) + 0.05, -15);
+  pastoralist.scale.setScalar(1.8);
+  pastoralist.userData.interactive = true;
+  pastoralist.userData.dialogue = [
+    'Our dry-season movement is gone, and the cattle routes are fractured.',
+    'Water access now depends on barriers we never needed before.'
+  ];
+  pastoralist.userData.dialogueId = 'scene3-pastoralist';
+  root.add(pastoralist);
+
+  const fisher = createNiloticHuman({ group: 'Nuer', role: 'fisher', direction: -1 });
+  fisher.position.set(5, terrainYAt(5, -12) + 0.05, -12);
+  fisher.scale.setScalar(1.8);
+  fisher.userData.interactive = true;
+  fisher.userData.dialogue = [
+    'Fish vanished from the spawning channels when flow patterns changed.',
+    'The pools left behind are shallow, warm, and biologically stressed.'
+  ];
+  fisher.userData.dialogueId = 'scene3-fisher';
+  root.add(fisher);
+
+  const villager = createNiloticHuman({ group: 'Dinka', role: 'villager', direction: -1 });
+  villager.position.set(22, terrainYAt(22, 5) + 0.05, 5);
+  villager.scale.setScalar(1.8);
+  villager.userData.interactive = true;
+  villager.userData.dialogue = [
+    'Children are getting sick from contact with stagnant water.',
+    'Disease risk rose while warnings were dismissed as collateral.'
+  ];
+  villager.userData.dialogueId = 'scene3-villager';
+  root.add(villager);
+
+  const elder = createNiloticHuman({ group: 'Nuer', role: 'elder', direction: 1 });
+  elder.position.set(-8, terrainYAt(-8, 30) + 0.05, 30);
+  elder.scale.setScalar(1.8);
+  elder.userData.interactive = true;
+  elder.userData.dialogue = [
+    'We warned that altering this wetland would bring sickness.',
+    'The signs were clear long before institutions chose to listen.'
+  ];
+  elder.userData.dialogueId = 'scene3-elder';
+  root.add(elder);
+
+  const fatiguedPerson = createNiloticHuman({ group: 'Dinka', role: 'villager', direction: 1 });
+  fatiguedPerson.scale.setScalar(1.8);
+  fatiguedPerson.position.set(10, terrainYAt(10, 12) + 0.62, 12);
+  fatiguedPerson.rotation.set(Math.PI / 2, 0.35, 0.25);
+  fatiguedPerson.userData.interactive = true;
+  fatiguedPerson.userData.dialogue = [
+    'I am exhausted and feverish after repeated exposure to stagnant water.',
+    'Fatigue and weakness are common in chronic schistosomiasis and related water-borne illness.'
+  ];
+  fatiguedPerson.userData.dialogueId = 'scene3-fatigued-person';
+  fatiguedPerson.userData.scene4BaseY = fatiguedPerson.position.y;
+  root.add(fatiguedPerson);
+
+  const sun = new THREE.DirectionalLight(0xbbaf8a, 0.5);
+  sun.position.set(26, 28, 12);
+  sun.castShadow = true;
+  root.add(sun);
+
+  const fill = new THREE.AmbientLight(0x706050, 0.4);
+  root.add(fill);
+
+  return {
+    root,
+    weakCows,
+    stagnantPools,
+    waterBodies,
+    muddyFootprints,
+    sparseEdgeVegetation,
+    vegetationPatches,
+    vegetationStateDefs,
+    waterStateDefs,
+    snailClusters,
+    deadFish,
+    crackedSoil,
+    pollutedTrees,
+    pastoralist,
+    fisher,
+    villager,
+    elder,
+    fatiguedPerson,
+    canal,
+    previousFog: scene.fog,
+    characters: [pastoralist, fisher, villager, elder, fatiguedPerson]
+  };
+}
+
+function createSpear() {
+  const spear = new THREE.Group();
+  
+  // Shaft
+  const shaft = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.08, 0.08, 1.8, 6),
+    new THREE.MeshStandardMaterial({ color: 0x6b4423, roughness: 0.8, metalness: 0.05 })
+  );
+  shaft.position.y = 0.9;
+  spear.add(shaft);
+  
+  // Sharp tip (cone)
+  const tip = new THREE.Mesh(
+    new THREE.ConeGeometry(0.15, 0.4, 8),
+    new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.5, metalness: 0.8 })
+  );
+  tip.position.y = 1.85;
+  spear.add(tip);
+  
+  return spear;
+}
+
+function buildScene5System() {
+  const root = new THREE.Group();
+
+  // === TERRAIN ===
+  const terrain = new THREE.Mesh(
+    new THREE.PlaneGeometry(100, 100, 64, 64),
+    new THREE.MeshStandardMaterial({
+      color: 0x8b7d3c,
+      roughness: 0.95,
+      metalness: 0.02
+    })
+  );
+  const terrainPos = terrain.geometry.attributes.position;
+  for (let i = 0; i < terrainPos.count; i += 1) {
+    const x = terrainPos.getX(i);
+    const z = terrainPos.getY(i);
+    const humps = Math.sin(x * 0.12) * 0.25 + Math.cos(z * 0.1) * 0.2;
+    terrainPos.setZ(i, -0.1 + humps);
+  }
+  terrainPos.needsUpdate = true;
+  terrain.geometry.computeVertexNormals();
+  terrain.rotation.x = -Math.PI / 2;
+  terrain.receiveShadow = true;
+  root.add(terrain);
+
+  // === CANAL TRENCH ===
+  // Canal runs along z=10, length 80, width 4, depth 3
+  const canalWallMat = new THREE.MeshStandardMaterial({ color: 0x5a4a3a, roughness: 0.85, metalness: 0.05 });
+  const canalBedMat = new THREE.MeshStandardMaterial({ color: 0x3d2e24, roughness: 0.92, metalness: 0 });
+  
+  // Left wall
+  const leftWall = new THREE.Mesh(new THREE.BoxGeometry(80, 3, 0.4), canalWallMat);
+  leftWall.position.set(0, -1.5, 8);
+  root.add(leftWall);
+  
+  // Right wall
+  const rightWall = new THREE.Mesh(new THREE.BoxGeometry(80, 3, 0.4), canalWallMat);
+  rightWall.position.set(0, -1.5, 12);
+  root.add(rightWall);
+  
+  // Canal bed
+  const canalBed = new THREE.Mesh(new THREE.PlaneGeometry(80, 4), canalBedMat);
+  canalBed.rotation.x = -Math.PI / 2;
+  canalBed.position.set(0, -3, 10);
+  root.add(canalBed);
+  
+  // Rocks in canal
+  for (let i = 0; i < 12; i += 1) {
+    const rock = new THREE.Mesh(
+      new THREE.DodecahedronGeometry(0.3),
+      new THREE.MeshStandardMaterial({ color: 0x706050, roughness: 0.9, metalness: 0 })
+    );
+    rock.position.set((Math.random() - 0.5) * 70, -2.5, 10 + (Math.random() - 0.5) * 3);
+    root.add(rock);
+  }
+  
+  // Canal as interactive object
+  const canalInteractive = new THREE.Group();
+  canalInteractive.userData.interactive = true;
+  canalInteractive.userData.dialogue = [
+    "The canal cut through the wetland like a scar that wouldn't heal.",
+    "Construction—state-controlled infrastructure—was the justification for stripping local rights."
+  ];
+  canalInteractive.userData.dialogueId = 'scene5-canal';
+  canalBed.userData.interactive = true;
+  canalBed.userData.dialogue = canalInteractive.userData.dialogue;
+  canalBed.userData.dialogueId = canalInteractive.userData.dialogueId;
+
+  // === ABANDONED BWE (scaled to 0.6) ===
+  const bwe = createImmersiveBWE();
+  bwe.scale.setScalar(0.6);
+  bwe.position.set(5, 0, 12);
+  // Raise boom
+  if (bwe.userData?.boom) {
+    bwe.userData.boom.rotation.x = -0.3;
+  }
+  // Add broken window to cabin
+  if (bwe.userData?.cabin) {
+    const brokenWindow = new THREE.Mesh(
+      new THREE.BoxGeometry(0.3, 0.3, 0.1),
+      new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.4, metalness: 0.2 })
+    );
+    brokenWindow.position.set(0.15, 0.1, -0.15);
+    bwe.userData.cabin.add(brokenWindow);
+    
+    const crackCylinder = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.02, 0.02, 0.4, 4),
+      new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.6, metalness: 0.1 })
+    );
+    crackCylinder.rotation.z = Math.PI / 4;
+    crackCylinder.position.set(0.08, 0.15, -0.12);
+    bwe.userData.cabin.add(crackCylinder);
+  }
+  root.add(bwe);
+
+  // === GUARD POSTS (Watchtowers) ===
+  const guardPosts = [];
+  const guardPostPositions = [[-15, 0, 18], [15, 0, 18]];
+  
+  guardPostPositions.forEach(([px, py, pz], idx) => {
+    const post = new THREE.Group();
+    const cylinderMat = new THREE.MeshStandardMaterial({ color: 0x8b7355, roughness: 0.8, metalness: 0.1 });
+    
+    // Four vertical cylinders
+    for (let i = 0; i < 4; i += 1) {
+      const angle = (i / 4) * Math.PI * 2;
+      const offset = 0.8;
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 3.5, 6), cylinderMat);
+      leg.position.set(Math.cos(angle) * offset, 1.75, Math.sin(angle) * offset);
+      post.add(leg);
+    }
+    
+    // Platform
+    const platform = new THREE.Mesh(
+      new THREE.BoxGeometry(2, 0.3, 2),
+      new THREE.MeshStandardMaterial({ color: 0x7a5f47, roughness: 0.8, metalness: 0.1 })
+    );
+    platform.position.y = 3.5;
+    post.add(platform);
+    
+    // Flag pole
+    const flagPole = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 1.5, 6), cylinderMat);
+    flagPole.position.set(0.7, 4.5, 0);
+    post.add(flagPole);
+    
+    // Flag
+    const flag = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.8, 0.5),
+      new THREE.MeshStandardMaterial({ color: 0x8b4513, roughness: 0.7, metalness: 0.05, side: THREE.DoubleSide })
+    );
+    flag.rotation.y = Math.PI / 2;
+    flag.position.set(1.4, 4.5, 0);
+    post.add(flag);
+    
+    // Guard on platform – reuse existing Nilotic human
+    const guard = createNiloticHuman({
+      group: idx === 0 ? 'Dinka' : 'Nuer',
+      role: 'carrier',
+      direction: idx === 0 ? 1 : -1
+    });
+    guard.position.set(0, 3.7, 0);   // above platform
+    guard.scale.setScalar(1.25);
+    guard.userData.interactive = true;
+    guard.userData.dialogue = [
+      "State security ensures the canal project.",
+      "We guard the interests of the state."
+    ];
+    guard.userData.dialogueId = `scene5-guard-${idx}`;
+    post.add(guard);
+    
+    post.position.set(px, py, pz);
+    root.add(post);
+    guardPosts.push(post);
+  });
+
+  // === SANDBAG WALLS ===
+  const sandbagColor = 0x7a6a53;
+  const sandbagMat = new THREE.MeshStandardMaterial({ color: sandbagColor, roughness: 0.9, metalness: 0 });
+  
+  // Resistance zone near (-10, 0, -5)
+  for (let i = 0; i < 4; i += 1) {
+    for (let j = 0; j < 3; j += 1) {
+      const sandbag = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.5, 6), sandbagMat);
+      sandbag.position.set(-10 - i * 0.7, j * 0.5, -5 + Math.random() * 0.8);
+      root.add(sandbag);
+    }
+  }
+  
+  // Resistance zone near (15, 0, -5)
+  for (let i = 0; i < 4; i += 1) {
+    for (let j = 0; j < 3; j += 1) {
+      const sandbag = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.5, 6), sandbagMat);
+      sandbag.position.set(15 + i * 0.7, j * 0.5, -5 + Math.random() * 0.8);
+      root.add(sandbag);
+    }
+  }
+
+  // === KNEELING ENGINEERS ===
+  const kneelers = [];
+  const kneelPositions = [[2, 0.1, 8], [2.5, 0.1, 8.5]];
+  
+  kneelPositions.forEach(([px, py, pz], idx) => {
+    const engineer = createKneelingEngineer();
+    engineer.position.set(px, py, pz);
+    engineer.scale.setScalar(1.3);
+    
+    engineer.userData.interactive = true;
+    engineer.userData.dialogue = [
+      "The engineers who built this—some of us did not believe in it.",
+      "But the orders came from above. We had no choice but to comply."
+    ];
+    engineer.userData.dialogueId = `scene5-engineer-${idx}`;
+    root.add(engineer);
+    kneelers.push(engineer);
+  });
+
+  // === GUARD BEHIND ENGINEERS (with rifle) ===
+  const guardBehind = createNiloticHuman({
+    group: 'Nuer',
+    role: 'carrier',
+    direction: -1
+  });
+  guardBehind.position.set(2.25, 0, 9.8);
+  guardBehind.scale.setScalar(1.4);
+  
+  // Rifle prop
+  const rifleBarrel = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.05, 0.05, 1.2, 8),
+    new THREE.MeshStandardMaterial({ color: 0x2b2b2b, roughness: 0.86, metalness: 0.08 })
+  );
+  rifleBarrel.rotation.z = Math.PI / 2;
+  rifleBarrel.position.set(0.3, 1.0, 0.3);
+  guardBehind.add(rifleBarrel);
+  
+  const rifleStock = new THREE.Mesh(
+    new THREE.BoxGeometry(0.1, 0.1, 0.6),
+    new THREE.MeshStandardMaterial({ color: 0x3a2f1f, roughness: 0.8, metalness: 0.1 })
+  );
+  rifleStock.position.set(0.15, 1.0, 0.6);
+  guardBehind.add(rifleStock);
+  
+  guardBehind.userData.interactive = true;
+  guardBehind.userData.dialogue = ["They will not escape.", "Order and security must prevail."];
+  guardBehind.userData.dialogueId = 'scene5-guard-behind';
+  root.add(guardBehind);
+
+  // === SPLA RUNNERS (mid-stride poses) ===
+  const runners = [];
+  const runnerPositions = [[-2, 0, 14], [6, 0, 13]];
+  
+  runnerPositions.forEach(([px, py, pz], idx) => {
+    const runner = createNiloticHuman({
+      group: idx === 0 ? 'Dinka' : 'Nuer',
+      role: 'fisher',
+      direction: 1
+    });
+    runner.position.set(px, py, pz);
+    runner.scale.setScalar(1.25);
+    
+    // Mid-stride pose
+    if (runner.userData) {
+      if (runner.userData.leftLeg) runner.userData.leftLeg.rotation.x = 0.8;
+      if (runner.userData.rightLeg) runner.userData.rightLeg.rotation.x = -1.2;
+    }
+    
+    // Rifle prop
+    const rifle = new THREE.Mesh(
+      new THREE.BoxGeometry(0.08, 0.08, 0.9),
+      new THREE.MeshStandardMaterial({ color: 0x2b2b2b, roughness: 0.86, metalness: 0.08 })
+    );
+    rifle.rotation.x = Math.PI / 4;
+    rifle.position.set(-0.2, 1.1, 0.2);
+    runner.add(rifle);
+    
+    runner.userData.interactive = true;
+    runner.userData.dialogue = [
+      "We run because we must. We fight because there is no other choice.",
+      "This is our land, our water. We will not surrender it."
+    ];
+    runner.userData.dialogueId = `scene5-runner-${idx}`;
+    root.add(runner);
+    runners.push(runner);
+    
+    // Motion trail - suspended rock
+    const rockTrail = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.2),
+      new THREE.MeshStandardMaterial({ color: 0x9a8a72, roughness: 0.8, metalness: 0.1, transparent: true, opacity: 0.6 })
+    );
+    rockTrail.position.set(px - 0.5, py + 0.3, pz - 0.5);
+    root.add(rockTrail);
+  });
+
+  // === FLAG HOLDER ON BWE ===
+  const flagHolder = createNiloticHuman({
+    group: 'Dinka',
+    role: 'carrier'
+  });
+  flagHolder.position.set(5, 3.8, 12);
+  flagHolder.scale.setScalar(1.1);
+  
+  // South Sudan flag with arms raised
+  if (flagHolder.userData) {
+    if (flagHolder.userData.leftArm) flagHolder.userData.leftArm.rotation.x = -Math.PI / 2.5;
+    if (flagHolder.userData.rightArm) flagHolder.userData.rightArm.rotation.x = -Math.PI / 2.5;
+  }
+  
+  // South Sudan flag: black, red, green with blue triangle and yellow star
+  const flagPart1 = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.5, 0.35),
+    new THREE.MeshStandardMaterial({ color: 0x000000, roughness: 0.7, metalness: 0.05, side: THREE.DoubleSide })
+  );
+  flagPart1.position.set(-0.3, 1.6, 0.4);
+  flagPart1.rotation.y = Math.PI / 2;
+  flagHolder.add(flagPart1);
+  
+  const flagPart2 = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.5, 0.35),
+    new THREE.MeshStandardMaterial({ color: 0xff0000, roughness: 0.7, metalness: 0.05, side: THREE.DoubleSide })
+  );
+  flagPart2.position.set(-0.3, 1.3, 0.4);
+  flagPart2.rotation.y = Math.PI / 2;
+  flagHolder.add(flagPart2);
+  
+  const flagPart3 = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.5, 0.3),
+    new THREE.MeshStandardMaterial({ color: 0x00aa00, roughness: 0.7, metalness: 0.05, side: THREE.DoubleSide })
+  );
+  flagPart3.position.set(-0.3, 1.0, 0.4);
+  flagPart3.rotation.y = Math.PI / 2;
+  flagHolder.add(flagPart3);
+  
+  const blueTri = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.3, 1.5),
+    new THREE.MeshStandardMaterial({ color: 0x0000ff, roughness: 0.7, metalness: 0.05, side: THREE.DoubleSide })
+  );
+  blueTri.position.set(-0.35, 1.3, 0.4);
+  blueTri.rotation.y = Math.PI / 2;
+  flagHolder.add(blueTri);
+  
+  const star = new THREE.Mesh(
+    new THREE.SphereGeometry(0.08, 8, 8),
+    new THREE.MeshStandardMaterial({ color: 0xffcc00, roughness: 0.6, metalness: 0.2 })
+  );
+  star.position.set(-0.32, 1.3, 0.4);
+  flagHolder.add(star);
+  
+  flagHolder.userData.dialogue = [
+    "This flag represents our hope for a free future.",
+    "We raise it now, in defiance and in faith."
+  ];
+  flagHolder.userData.dialogueId = 'scene5-flag-holder';
+  flagHolder.userData.interactive = true;
+  root.add(flagHolder);
+
+  // === ROCK THROWERS ON EXCAVATOR ===
+  for (let i = 0; i < 2; i += 1) {
+    const thrower = createNiloticHuman({
+      group: i === 0 ? 'Dinka' : 'Nuer',
+      role: 'fisher'
+    });
+    thrower.position.set(5 + i * 1.5, 2.5, 12 + i * 0.8);
+    thrower.scale.setScalar(1.0);
+    
+    // Arm raised
+    if (thrower.userData) {
+      if (thrower.userData.rightArm) thrower.userData.rightArm.rotation.x = -Math.PI / 1.8;
+    }
+    
+    // Rock floating near hand
+    const rock = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.25),
+      new THREE.MeshStandardMaterial({ color: 0x8a7a6a, roughness: 0.85, metalness: 0.1 })
+    );
+    rock.position.set(5.5 + i * 1.5, 2.8, 12.3 + i * 0.8);
+    root.add(rock);
+    
+    thrower.userData.dialogue = [
+      "We throw with all our strength.",
+      "Every rock, a voice of resistance."
+    ];
+    thrower.userData.dialogueId = `scene5-rock-thrower-${i}`;
+    thrower.userData.interactive = true;
+    root.add(thrower);
+  }
+
+  // === CHEERING CROWD (semicircle) ===
+  const crowd = [];
+  const crowdCenter = new THREE.Vector3(0, 0, 3);
+  const crowdRadius = 8;
+  for (let i = 0; i < 8; i += 1) {
+    const angle = (i / 8) * Math.PI;
+    const x = crowdCenter.x + Math.sin(angle) * crowdRadius;
+    const z = crowdCenter.z - Math.cos(angle) * crowdRadius;
+    
+    const villager = createNiloticHuman({
+      group: i % 2 === 0 ? 'Dinka' : 'Nuer',
+      role: 'fisher',
+      direction: 1
+    });
+    villager.position.set(x, 0.1, z);
+    villager.scale.setScalar(1.5);
+    villager.rotation.y = Math.atan2(-z, -x);
+    
+    // Arms up
+    if (villager.userData) {
+      if (villager.userData.leftArm) villager.userData.leftArm.rotation.x = -Math.PI / 2.2;
+      if (villager.userData.rightArm) villager.userData.rightArm.rotation.x = -Math.PI / 2.2;
+    }
+    
+    villager.userData.baseY = villager.position.y;
+    root.add(villager);
+    crowd.push(villager);
+  }
+
+  // === DESTROYED EQUIPMENT (scattered crates) ===
+  for (let i = 0; i < 5; i += 1) {
+    const crate = new THREE.Mesh(
+      new THREE.BoxGeometry(0.6, 0.6, 0.6),
+      new THREE.MeshStandardMaterial({ color: 0x7a6a5a, roughness: 0.8, metalness: 0.05 })
+    );
+    crate.position.set(3 + (Math.random() - 0.5) * 8, 0.3, 10 + (Math.random() - 0.5) * 4);
+    crate.rotation.set(Math.random() * 0.4, Math.random() * Math.PI, Math.random() * 0.4);
+    crate.userData.interactive = true;
+    crate.userData.dialogue = [
+      "Construction didn't stop when locals protested.",
+      "The machines kept working, indifferent to human suffering."
+    ];
+    crate.userData.dialogueId = `scene5-crate-${i}`;
+    root.add(crate);
+  }
+
+  // === BARRIER (invisible plane) ===
+  const barrier = new THREE.Mesh(
+    new THREE.PlaneGeometry(20, 0.1),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, side: THREE.DoubleSide })
+  );
+  barrier.rotation.x = -Math.PI / 2;
+  barrier.position.set(0, 0.01, 9.5);
+  barrier.userData.interactive = true;
+  barrier.userData.dialogue = [
+    "Access is restricted.",
+    "The canal was protected as a state project, limiting local control."
+  ];
+  barrier.userData.dialogueId = 'scene5-barrier';
+  root.add(barrier);
+
+  // === SCATTERED ROCKS ===
+  for (let i = 0; i < 8; i += 1) {
+    const rockGeom = new THREE.IcosahedronGeometry(0.35);
+    const rock = new THREE.Mesh(
+      rockGeom,
+      new THREE.MeshStandardMaterial({ color: 0x8a7a6a, roughness: 0.85, metalness: 0.1 })
+    );
+    rock.position.set(2 + (Math.random() - 0.5) * 12, 0.3, 10 + (Math.random() - 0.5) * 6);
+    rock.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+    rock.userData.interactive = true;
+    rock.userData.dialogue = [
+      "They used whatever they had.",
+      "Resistance was not professional—it was survival."
+    ];
+    rock.userData.dialogueId = `scene5-rock-${i}`;
+    root.add(rock);
+  }
+
+  // === LIGHTING ===
+  const directionalLight = new THREE.DirectionalLight(0xbbaf8a, 0.6);
+  directionalLight.position.set(20, 20, 15);
+  directionalLight.castShadow = true;
+  root.add(directionalLight);
+
+  const ambientLight = new THREE.AmbientLight(0x706050, 0.4);
+  root.add(ambientLight);
+
+  // === FOG (overcast, not sunny) ===
+  if (scene) {
+    scene.fog = new THREE.Fog(0x9b8a72, 8, 55);
+  }
+
+  return {
+    root,
+    crowd,
+    rocks: [],
+    flags: [],
+    dust: null,
+    rockThrowers: [],
+    throwingRocks: []
+  };
+}
+
+// ============================================================================
+// SCENE 6: The Broken Sponge (Scene 5 - Microclimate Collapse)
+// ============================================================================
+
+function buildScene6System() {
+  const root = new THREE.Group();
+
+  // === DEGRADED TERRAIN ===
+  const terrain = new THREE.Mesh(
+    new THREE.PlaneGeometry(120, 120, 80, 80),
+    new THREE.MeshStandardMaterial({
+      color: 0xa68860,
+      roughness: 0.95,
+      metalness: 0.02
+    })
+  );
+  const terrainPos = terrain.geometry.attributes.position;
+  for (let i = 0; i < terrainPos.count; i += 1) {
+    const x = terrainPos.getX(i);
+    const z = terrainPos.getY(i);
+    // Eroded, cracked appearance
+    const erosion = Math.sin(x * 0.18 + z * 0.15) * 0.3 + Math.cos(z * 0.12 - x * 0.08) * 0.25;
+    const cracks = Math.sin(x * 0.45) * 0.08 + Math.sin(z * 0.35) * 0.06;
+    terrainPos.setZ(i, -0.15 + erosion + cracks);
+  }
+  terrainPos.needsUpdate = true;
+  terrain.geometry.computeVertexNormals();
+  terrain.rotation.x = -Math.PI / 2;
+  terrain.receiveShadow = true;
+  terrain.castShadow = true;
+  root.add(terrain);
+
+  // === FRAGMENTED WATER POOLS ===
+  // Pool 1: Shrinking main wetland (center)
+  const pool1 = new THREE.Mesh(
+    new THREE.CircleGeometry(18, 32),
+    new THREE.MeshStandardMaterial({
+      color: 0x6B8FC7,
+      roughness: 0.3,
+      metalness: 0.2
+    })
+  );
+  pool1.rotation.x = -Math.PI / 2;
+  pool1.position.set(0, 0.05, -5);
+  pool1.receiveShadow = true;
+  root.add(pool1);
+
+  // Pool 2: Stagnant water (left)
+  const pool2 = new THREE.Mesh(
+    new THREE.CircleGeometry(8, 24),
+    new THREE.MeshStandardMaterial({
+      color: 0x5a7a9f,
+      roughness: 0.6,
+      metalness: 0.05
+    })
+  );
+  pool2.rotation.x = -Math.PI / 2;
+  pool2.position.set(-25, 0.02, 10);
+  pool2.receiveShadow = true;
+  root.add(pool2);
+
+  // Pool 3: Disconnected pool (right)
+  const pool3 = new THREE.Mesh(
+    new THREE.CircleGeometry(6, 20),
+    new THREE.MeshStandardMaterial({
+      color: 0x4a6a7f,
+      roughness: 0.7,
+      metalness: 0.01
+    })
+  );
+  pool3.rotation.x = -Math.PI / 2;
+  pool3.position.set(28, 0.02, -15);
+  pool3.receiveShadow = true;
+  root.add(pool3);
+
+  // === DEAD VEGETATION PATCHES ===
+  const deadVegMat = new THREE.MeshStandardMaterial({
+    color: 0x7a6a4a,
+    roughness: 0.92,
+    metalness: 0
+  });
+
+  // Patch 1: Dead reeds left
+  const deadPatch1 = new THREE.Mesh(
+    new THREE.PlaneGeometry(35, 45),
+    deadVegMat
+  );
+  deadPatch1.rotation.x = -Math.PI / 2;
+  deadPatch1.position.set(-35, 0.04, 25);
+  deadPatch1.receiveShadow = true;
+  root.add(deadPatch1);
+
+  // Patch 2: Dead vegetation right
+  const deadPatch2 = new THREE.Mesh(
+    new THREE.PlaneGeometry(30, 40),
+    deadVegMat
+  );
+  deadPatch2.rotation.x = -Math.PI / 2;
+  deadPatch2.position.set(40, 0.04, -20);
+  deadPatch2.receiveShadow = true;
+  root.add(deadPatch2);
+
+  // === EVAPORATION PARTICLES ===
+  const particleCount = 200;
+  const positions = new Float32Array(particleCount * 3);
+  const velocities = new Float32Array(particleCount * 3);
+  
+  for (let i = 0; i < particleCount; i += 1) {
+    positions[i * 3] = (Math.random() - 0.5) * 80;
+    positions[i * 3 + 1] = Math.random() * 0.5;
+    positions[i * 3 + 2] = (Math.random() - 0.5) * 80;
+    
+    velocities[i * 3] = (Math.random() - 0.5) * 0.08;
+    velocities[i * 3 + 1] = 0.05 + Math.random() * 0.04;
+    velocities[i * 3 + 2] = (Math.random() - 0.5) * 0.08;
+  }
+
+  const particleGeometry = new THREE.BufferGeometry();
+  particleGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const particleMaterial = new THREE.PointsMaterial({
+    color: 0xd4c9b8,
+    size: 0.08,
+    transparent: true,
+    opacity: 0.3,
+    depthWrite: false,
+    sizeAttenuation: true
+  });
+  const particles = new THREE.Points(particleGeometry, particleMaterial);
+  root.add(particles);
+
+  // Store velocities for animation
+  root.userData.evaporationVelocities = velocities;
+  root.userData.evaporationParticles = particles;
+  root.userData.evaporationCycleTime = 0;
+
+  // === CRACKED SOIL VISUALIZATION ===
+  for (let i = 0; i < 15; i += 1) {
+    const crack = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3((Math.random() - 0.5) * 100, 0.08, (Math.random() - 0.5) * 100),
+        new THREE.Vector3((Math.random() - 0.5) * 100, 0.08, (Math.random() - 0.5) * 100)
+      ]),
+      new THREE.LineBasicMaterial({ color: 0x8a7a5a, linewidth: 2, transparent: true, opacity: 0.5 })
+    );
+    root.add(crack);
+  }
+
+  // === STRUGGLING HERDER WITH CATTLE ===
+  const herder = createNiloticHuman({
+    group: 'Dinka',
+    role: 'carrier',
+    direction: 1
+  });
+  herder.position.set(35, 0, -25);
+  herder.scale.setScalar(1.3);
+  
+  // Pose: searching/walking
+  if (herder.userData) {
+    if (herder.userData.leftLeg) herder.userData.leftLeg.rotation.x = 0.6;
+    if (herder.userData.rightLeg) herder.userData.rightLeg.rotation.x = -0.4;
+    if (herder.userData.leftArm) herder.userData.leftArm.rotation.x = 0.3;
+    if (herder.userData.rightArm) herder.userData.rightArm.rotation.x = -0.2;
+  }
+  
+  herder.userData.interactive = true;
+  herder.userData.dialogue = [
+    "The wetland shrinks every season now.",
+    "My cattle have less to drink, less grazing land. What will become of us?"
+  ];
+  herder.userData.dialogueId = 'scene6-herder';
+  herder.userData.baseY = herder.position.y;
+  root.add(herder);
+
+  // === SPARSE REMAINING CATTLE ===
+  for (let i = 0; i < 3; i += 1) {
+    const cow = createNiloticHuman({
+      group: 'Nuer',
+      role: 'fisher',
+      direction: -1
+    });
+    cow.scale.setScalar(0.8);
+    cow.position.set(32 + i * 4, 0, -30 + Math.random() * 5);
+    
+    // Slouched posture - exhausted
+    if (cow.userData) {
+      if (cow.userData.leftLeg) cow.userData.leftLeg.rotation.x = 0.2;
+      if (cow.userData.rightLeg) cow.userData.rightLeg.rotation.x = -0.2;
+    }
+    
+    cow.userData.interactive = true;
+    cow.userData.dialogue = [
+      "The dry season lasts longer now.",
+      "We are starving."
+    ];
+    cow.userData.dialogueId = `scene6-cow-${i}`;
+    root.add(cow);
+  }
+
+  // === ENVIRONMENTAL MARKERS ===
+  // Temperature gauge (visual indicator)
+  const thermometer = new THREE.Group();
+  const thermometerBase = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.3, 0.3, 2.5, 8),
+    new THREE.MeshStandardMaterial({ color: 0xc0504d, roughness: 0.4, metalness: 0.3 })
+  );
+  thermometer.add(thermometerBase);
+  thermometer.position.set(-40, 0, 25);
+  thermometer.userData.interactive = true;
+  thermometer.userData.dialogue = [
+    "30°C - A 2-4°C rise from before canal construction.",
+    "The microclimate has shifted, drying out the region."
+  ];
+  thermometer.userData.dialogueId = 'scene6-temperature';
+  root.add(thermometer);
+
+  // Humidity gauge
+  const humidityMarker = new THREE.Mesh(
+    new THREE.SphereGeometry(0.4, 16, 16),
+    new THREE.MeshStandardMaterial({ color: 0x70ad47, roughness: 0.5, metalness: 0.2 })
+  );
+  humidityMarker.position.set(45, 1.5, 20);
+  humidityMarker.userData.interactive = true;
+  humidityMarker.userData.dialogue = [
+    "Humidity: 62% - down 15-20% from seasonal peaks.",
+    "The sponge no longer holds water. It releases it all at once."
+  ];
+  humidityMarker.userData.dialogueId = 'scene6-humidity';
+  root.add(humidityMarker);
+
+  // === LIGHTING ===
+  const sunLight = new THREE.DirectionalLight(0xf5d99b, 0.8);
+  sunLight.position.set(35, 30, 25);
+  sunLight.castShadow = true;
+  sunLight.shadow.mapSize.width = 2048;
+  sunLight.shadow.mapSize.height = 2048;
+  sunLight.shadow.camera.left = -80;
+  sunLight.shadow.camera.right = 80;
+  sunLight.shadow.camera.top = 80;
+  sunLight.shadow.camera.bottom = -80;
+  root.add(sunLight);
+
+  const ambientLight = new THREE.AmbientLight(0xb8a88a, 0.5);
+  root.add(ambientLight);
+
+  const hemiLight = new THREE.HemisphereLight(0xd4a574, 0x8a7355, 0.45);
+  root.add(hemiLight);
+
+  // === FOG (Hot, hazy atmosphere) ===
+  if (scene) {
+    scene.fog = new THREE.Fog(0xc9b8a0, 12, 80);
+  }
+
+  return {
+    root,
+    herder,
+    pools: [pool1, pool2, pool3],
+    particles,
+    evaporationActive: true
+  };
+}
+
+function applyScene3Environment() {
+  scene3Runtime = buildScene4System();
+  scene.add(scene3Runtime.root);
+  sceneObjects['scene4-root'] = scene3Runtime.root;
+  scene.fog = new THREE.Fog(0x9b8a72, 10, 60);
+}
+
+function updateScene4(deltaSeconds, elapsedTime) {
+  if (!scene3Runtime) {
+    return;
+  }
+
+  const cycleDurationSeconds = 58;
+  const stressProgress = (elapsedTime % cycleDurationSeconds) / cycleDurationSeconds;
+
+  if (Array.isArray(scene3Runtime.characters)) {
+    scene3Runtime.characters.forEach((character, idx) => {
+      if (!character?.position) {
+        return;
+      }
+      if (!Number.isFinite(character.userData?.scene4BaseY)) {
+        character.userData.scene4BaseY = character.position.y;
+      }
+      const baseY = character.userData.scene4BaseY;
+      character.rotation.y += Math.sin(elapsedTime * 0.5 + idx * 0.3) * 0.002;
+      character.position.y = baseY + Math.sin(elapsedTime * 1.2 + idx * 0.4) * 0.005;
+    });
+  }
+
+  if (
+    Array.isArray(scene3Runtime.vegetationPatches)
+    && Array.isArray(scene3Runtime.vegetationStateDefs)
+    && scene3Runtime.vegetationStateDefs.length === 4
+  ) {
+    scene3Runtime.vegetationPatches.forEach((patchData, idx) => {
+      const localOffset = patchData.patch?.userData?.stateBias || 0;
+      const nearWater = patchData.patch?.userData?.nearWaterFactor || 0;
+      const localStress = clamp(
+        stressProgress + localOffset + Math.sin(elapsedTime * 0.11 + idx * 0.8) * 0.04,
+        0,
+        1
+      );
+      const blend = getFourStateBlend(localStress);
+      const from = scene3Runtime.vegetationStateDefs[blend.index];
+      const to = scene3Runtime.vegetationStateDefs[blend.nextIndex];
+
+      const density = lerp(from.density, to.density, blend.t);
+      const grassHeight = lerp(from.grassHeight, to.grassHeight, blend.t);
+      const grassLean = lerp(from.grassLean, to.grassLean, blend.t);
+      const bareOpacity = lerp(from.bareOpacity, to.bareOpacity, blend.t);
+      const moistOpacity = lerp(from.moistOpacity, to.moistOpacity, blend.t);
+      const cropHeight = lerp(from.cropHeight, to.cropHeight, blend.t);
+      const cropLean = lerp(from.cropLean, to.cropLean, blend.t);
+      const cropPresence = lerp(from.cropPresence, to.cropPresence, blend.t);
+
+      const grassColor = new THREE.Color(from.grassColor).lerp(new THREE.Color(to.grassColor), blend.t);
+      const soilColor = new THREE.Color(from.soilColor).lerp(new THREE.Color(to.soilColor), blend.t);
+
+      if (patchData.moistDisk?.material) {
+        patchData.moistDisk.material.opacity = moistOpacity * (1 - nearWater * 0.35);
+        patchData.moistDisk.material.color.copy(soilColor);
+      }
+      if (patchData.barePatch?.material) {
+        patchData.barePatch.material.opacity = bareOpacity + nearWater * 0.08;
+        patchData.barePatch.material.color.copy(soilColor);
+      }
+
+      patchData.blades.forEach((blade) => {
+        if (!blade?.material) {
+          return;
+        }
+        const baseHeight = blade.userData?.baseHeight || 0.45;
+        const resilience = blade.userData?.resilience || 0;
+        const bendPhase = blade.userData?.bendPhase || 0;
+        const survives = density - resilience * 0.75 > patchData.dryThreshold - nearWater * 0.1;
+        blade.visible = survives;
+        if (!survives) {
+          return;
+        }
+        blade.scale.y = Math.max(0.22, grassHeight * (0.85 + resilience * 0.25));
+        blade.position.y = (baseHeight * blade.scale.y) * 0.5;
+        blade.rotation.z = grassLean * (0.28 + resilience * 0.24) + Math.sin(elapsedTime * 0.7 + bendPhase) * 0.08;
+        blade.material.color.copy(grassColor);
+      });
+
+      if (patchData.crop) {
+        patchData.crop.visible = cropPresence > 0.1;
+        if (patchData.crop.visible) {
+          patchData.crop.scale.y = cropHeight;
+          patchData.crop.rotation.z = cropLean * (0.35 + nearWater * 0.2);
+          if (patchData.stem?.material) {
+            patchData.stem.material.color.copy(soilColor);
+          }
+          if (patchData.wiltHead?.material) {
+            patchData.wiltHead.material.color.copy(
+              grassColor.clone().lerp(new THREE.Color(0x8f8879), clamp(localStress * 0.8, 0, 1))
+            );
+          }
+          patchData.sideShoots.forEach((shoot, shootIdx) => {
+            if (!shoot?.material) {
+              return;
+            }
+            shoot.visible = cropPresence > (0.2 + shootIdx * 0.12);
+            shoot.material.color.copy(soilColor);
+          });
+        }
+      }
+    });
+  }
+
+  if (Array.isArray(scene3Runtime.weakCows)) {
+    scene3Runtime.weakCows.forEach((cow, idx) => {
+      if (!cow?.position) {
+        return;
+      }
+      cow.position.x += Math.cos(elapsedTime * 0.3 + idx) * 0.02 * deltaSeconds;
+      cow.position.z += Math.sin(elapsedTime * 0.2 + idx) * 0.02 * deltaSeconds;
+    });
+  }
+
+  if (
+    Array.isArray(scene3Runtime.waterBodies)
+    && Array.isArray(scene3Runtime.waterStateDefs)
+    && scene3Runtime.waterStateDefs.length === 4
+  ) {
+    scene3Runtime.waterBodies.forEach((body, idx) => {
+      if (!body?.pool?.material || !body.mudRim?.material || !body.surfaceFilm?.material) {
+        return;
+      }
+
+      const localStress = clamp(
+        stressProgress + (body.stateBias || 0) + Math.sin(elapsedTime * 0.09 + idx * 0.65) * 0.04,
+        0,
+        1
+      );
+      const blend = getFourStateBlend(localStress);
+      const from = scene3Runtime.waterStateDefs[blend.index];
+      const to = scene3Runtime.waterStateDefs[blend.nextIndex];
+
+      const waterColor = new THREE.Color(from.color).lerp(new THREE.Color(to.color), blend.t);
+      const roughness = lerp(from.roughness, to.roughness, blend.t);
+      const metalness = lerp(from.metalness, to.metalness, blend.t);
+      const opacity = lerp(from.opacity, to.opacity, blend.t);
+      const ripple = lerp(from.ripple, to.ripple, blend.t);
+      const film = lerp(from.film, to.film, blend.t);
+      const debris = lerp(from.debris, to.debris, blend.t);
+      const algae = lerp(from.algae, to.algae, blend.t);
+      const rim = lerp(from.rim, to.rim, blend.t);
+      const waterlogged = lerp(from.waterlogged, to.waterlogged, blend.t);
+
+      body.pool.material.color.copy(waterColor);
+      body.pool.material.roughness = roughness;
+      body.pool.material.metalness = metalness;
+      body.pool.material.opacity = opacity + Math.sin(elapsedTime * 2.1 + idx * 0.7) * ripple * 0.15;
+
+      const rippleScaleX = 1 + Math.sin(elapsedTime * 1.8 + idx * 0.6) * ripple;
+      const rippleScaleY = 1 + Math.cos(elapsedTime * 1.5 + idx * 0.5) * ripple * 0.8;
+      body.pool.scale.set(rippleScaleX, rippleScaleY, 1);
+
+      body.surfaceFilm.material.opacity = film;
+      body.surfaceFilm.material.color.copy(
+        waterColor.clone().lerp(new THREE.Color(0x8f9588), clamp(localStress * 0.9, 0, 1))
+      );
+
+      body.mudRim.material.opacity = rim;
+      body.mudRim.material.color.copy(new THREE.Color(0x5f503d).lerp(new THREE.Color(0x4b4338), localStress));
+
+      body.waterloggedZone.material.opacity = waterlogged;
+      body.debrisPieces.forEach((piece, pieceIdx) => {
+        if (!piece?.material) {
+          return;
+        }
+        piece.material.opacity = debris * (0.45 + ((pieceIdx % 3) * 0.15));
+      });
+
+      body.algaeMaterials.forEach((mat, matIdx) => {
+        mat.opacity = algae * (0.35 + (matIdx % 2) * 0.2);
+      });
+
+      body.edgeGrass.forEach((blade) => {
+        if (!blade?.material) {
+          return;
+        }
+        const surviveThreshold = 0.25 + localStress * 0.65;
+        const resilience = blade.userData?.resilience || 0;
+        blade.visible = resilience > surviveThreshold;
+        if (!blade.visible) {
+          return;
+        }
+        const baseHeight = blade.userData?.baseHeight || 0.3;
+        const baseGroundY = blade.userData?.baseGroundY || blade.position.y;
+        blade.scale.y = lerp(1, 0.42, localStress);
+        blade.position.y = baseGroundY + (baseHeight * blade.scale.y) * 0.5;
+        blade.material.color.copy(
+          new THREE.Color(0x6f7751).lerp(new THREE.Color(0x8e866d), clamp(localStress * 0.8, 0, 1))
+        );
+      });
+    });
+  }
+
+  if (Array.isArray(scene3Runtime.muddyFootprints)) {
+    scene3Runtime.muddyFootprints.forEach((footprint, idx) => {
+      if (!footprint?.material) {
+        return;
+      }
+      const pulse = Math.sin(elapsedTime * 0.7 + idx * 0.4) * 0.015;
+      footprint.material.opacity = 0.06 + clamp(stressProgress * 0.12, 0, 0.12) + pulse;
+    });
+  }
+
+  if (Array.isArray(scene3Runtime.snailClusters)) {
+    scene3Runtime.snailClusters.forEach((cluster, idx) => {
+      if (!cluster) {
+        return;
+      }
+      const baseY = Number.isFinite(cluster.userData?.baseY)
+        ? cluster.userData.baseY
+        : cluster.position.y;
+      cluster.position.y = baseY + Math.sin(elapsedTime * 1.7 + idx * 0.4) * 0.012;
+    });
+  }
+
+  if (Array.isArray(scene3Runtime.deadFish)) {
+    scene3Runtime.deadFish.forEach((fish, idx) => {
+      if (!fish?.position) {
+        return;
+      }
+      const baseY = Number.isFinite(fish.userData?.flopBaseY) ? fish.userData.flopBaseY : fish.position.y;
+      const seed = fish.userData?.flopSeed || 0;
+      const pollutionBias = fish.userData?.pollutionBias || 0.5;
+      const contamination = clamp(stressProgress + pollutionBias - 0.55, 0, 1);
+      fish.visible = contamination > 0.08;
+      fish.position.y = baseY + Math.sin(elapsedTime * 0.35 + seed + idx * 0.2) * 0.002;
+      fish.rotation.x = (fish.userData?.flopBaseRotX || 0) + Math.sin(elapsedTime * 0.35 + seed) * 0.004;
+      fish.rotation.z = (fish.userData?.flopBaseRotZ || fish.rotation.z) + Math.sin(elapsedTime * 0.22 + seed) * 0.003;
+    });
+  }
+}
+
+function updateScene5(deltaSeconds, elapsedTime) {
+  if (!scene4Runtime) return;
+
+  // Gently sway the South Sudan flag
+  if (Array.isArray(scene4Runtime.flags)) {
+    scene4Runtime.flags.forEach((flag, idx) => {
+      if (flag.position) {
+        flag.position.x += Math.sin(elapsedTime * 2 + idx * 0.5) * 0.001;
+        flag.position.z += Math.cos(elapsedTime * 1.7 + idx * 0.5) * 0.001;
+      }
+    });
+  }
+
+  // Subtle crowd bob
+  if (Array.isArray(scene4Runtime.crowd)) {
+    scene4Runtime.crowd.forEach((person) => {
+      if (!person.userData.baseY) person.userData.baseY = person.position.y;
+      person.position.y = person.userData.baseY + Math.sin(elapsedTime * 2.5 + person.id) * 0.005;
+    });
+  }
+
+  // Rotate suspended rocks slowly
+  if (Array.isArray(scene4Runtime.rocks)) {
+    scene4Runtime.rocks.forEach(rock => {
+      rock.rotation.y += deltaSeconds * 0.2;
+      rock.rotation.x += deltaSeconds * 0.15;
+    });
+  }
+
+  // Animate dust near excavator
+  if (scene4Runtime.dust) {
+    const pos = scene4Runtime.dust.geometry.attributes.position.array;
+    for (let i = 0; i < pos.length; i += 3) {
+      pos[i + 1] += deltaSeconds * 0.3;
+      if (pos[i + 1] > 6) pos[i + 1] = 2.5;
+    }
+    scene4Runtime.dust.geometry.attributes.position.needsUpdate = true;
+  }
+}
+
+function updateScene6(deltaSeconds, elapsedTime) {
+  if (!scene5Runtime) return;
+
+  // Animate evaporation particles (rising moisture)
+  if (scene5Runtime.evaporationParticles && scene5Runtime.evaporationVelocities) {
+    const positions = scene5Runtime.evaporationParticles.geometry.attributes.position.array;
+    const velocities = scene5Runtime.evaporationVelocities;
+    const particleCount = velocities.length / 3;
+
+    for (let i = 0; i < particleCount; i += 1) {
+      const idx = i * 3;
+      
+      // Update position
+      positions[idx] += velocities[idx] * deltaSeconds * 8;
+      positions[idx + 1] += velocities[idx + 1] * deltaSeconds * 8;
+      positions[idx + 2] += velocities[idx + 2] * deltaSeconds * 8;
+
+      // Reset particles when they reach top
+      if (positions[idx + 1] > 3) {
+        positions[idx] = (Math.random() - 0.5) * 80;
+        positions[idx + 1] = 0.1;
+        positions[idx + 2] = (Math.random() - 0.5) * 80;
+      }
+    }
+
+    scene5Runtime.evaporationParticles.geometry.attributes.position.needsUpdate = true;
+  }
+
+  // Subtle herder walking animation
+  if (scene5Runtime.herder && scene5Runtime.herder.userData) {
+    scene5Runtime.herder.userData.baseY = scene5Runtime.herder.userData.baseY || scene5Runtime.herder.position.y;
+    scene5Runtime.herder.position.y = scene5Runtime.herder.userData.baseY + Math.sin(elapsedTime * 3) * 0.02;
+  }
+}
+
+function clearScene3Environment() {
+  if (!scene3Runtime) {
+    return;
+  }
+
+  scene.remove(scene3Runtime.root);
+  disposeObject3D(scene3Runtime.root);
+  delete sceneObjects['scene4-root'];
+  scene.fog = scene3Runtime.previousFog || new THREE.FogExp2(0xd7e7ef, 0.005);
+  scene3Runtime = null;
+}
+
+function clearScene2Environment() {
+  if (!scene2Runtime) {
+    return;
+  }
+
+  scene.remove(scene2Runtime.root);
+  disposeObject3D(scene2Runtime.root);
+  scene.fog = scene2Runtime.previousFog || new THREE.FogExp2(0xd7e7ef, 0.005);
+  scene2Runtime = null;
 }
 
 function transitionToScene(progress, fromRoot, toRoot) {
@@ -3427,23 +7020,36 @@ export function initThreeJS() {
     return false;
   }
 
-  // Scene setup
-  scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x1a2a3a);
-  scene.fog = new THREE.FogExp2(0xd7e7ef, 0.005);
+  const usingExternalContext = !!(externalThreeContext?.scene && externalThreeContext?.camera && externalThreeContext?.renderer);
 
-  // Camera setup
-  const initialSize = getRendererSize();
-  camera = new THREE.PerspectiveCamera(62, initialSize.width / initialSize.height, 0.1, 1000);
-  camera.position.set(8, 26, 42);
-  camera.lookAt(0, 8, 0);
+  if (usingExternalContext) {
+    scene = externalThreeContext.scene;
+    camera = externalThreeContext.camera;
+    renderer = externalThreeContext.renderer;
+    canvas = externalThreeContext.canvas || renderer.domElement;
+    scene.background = new THREE.Color(0x1a2a3a);
+    scene.fog = new THREE.FogExp2(0xd7e7ef, 0.005);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
+  } else {
+    // Scene setup
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x1a2a3a);
+    scene.fog = new THREE.FogExp2(0xd7e7ef, 0.005);
 
-  // Renderer setup
-  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
-  renderer.setSize(initialSize.width, initialSize.height, false);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFShadowMap;
+    // Camera setup
+    const initialSize = getRendererSize();
+    camera = new THREE.PerspectiveCamera(62, initialSize.width / initialSize.height, 0.1, 1000);
+    camera.position.set(8, 26, 42);
+    camera.lookAt(0, 8, 0);
+
+    // Renderer setup
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+    renderer.setSize(initialSize.width, initialSize.height, false);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
+  }
 
   scene0Controls = new OrbitControls(camera, renderer.domElement);
   scene0Controls.enableDamping = true;
@@ -3457,7 +7063,7 @@ export function initThreeJS() {
   scene0Controls.screenSpacePanning = true;
   scene0Controls.minPolarAngle = 0.35;
   scene0Controls.maxPolarAngle = 1.35;
-  scene0Controls.enabled = false;
+  scene0Controls.enabled = true;
   scene0Controls.update();
 
   // Lighting
@@ -3488,6 +7094,12 @@ export function initThreeJS() {
       scene0Runtime.introActive = false;
     }
   });
+
+  if (renderer?.domElement) {
+    renderer.domElement.addEventListener('pointerdown', handleScenePointerDown);
+    renderer.domElement.addEventListener('pointermove', handleScenePointerMove);
+    renderer.domElement.addEventListener('pointerleave', handleScenePointerLeave);
+  }
 
   // Start animation loop
   animate();
@@ -3524,6 +7136,14 @@ function animate() {
     updateScene0(deltaSeconds, elapsedTime);
   } else if (currentSceneIndex === 1) {
     updateScene1(deltaSeconds, elapsedTime);
+  } else if (currentSceneIndex === 2 && scene2Runtime?.crowdManager) {
+    scene2Runtime.crowdManager.update(elapsedTime);
+  } else if (currentSceneIndex === 3 && scene3Runtime) {
+    updateScene4(deltaSeconds, elapsedTime);
+  } else if (currentSceneIndex === 4 && scene4Runtime) {
+    updateScene5(deltaSeconds, elapsedTime);
+  } else if (currentSceneIndex === 5 && scene5Runtime) {
+    updateScene6(deltaSeconds, elapsedTime);
   }
 
   updateWeatherEffects(deltaSeconds, elapsedTime);
@@ -3533,6 +7153,76 @@ function animate() {
   }
 
   renderer.render(scene, camera);
+}
+
+function getDialogueTargetFromPointerEvent(event) {
+  const searchRoots = [];
+  if (currentSceneIndex === 2 && scene2Runtime?.root) {
+    searchRoots.push(scene2Runtime.root);
+  }
+  if (currentSceneIndex === 3 && scene3Runtime?.root) {
+    searchRoots.push(scene3Runtime.root);
+  }
+  if (currentSceneIndex === 4 && scene4Runtime?.root) {
+    searchRoots.push(scene4Runtime.root);
+  }
+  if (currentSceneIndex === 5 && scene5Runtime?.root) {
+    searchRoots.push(scene5Runtime.root);
+  }
+
+  if (!scene || !camera || !renderer?.domElement || searchRoots.length < 1) {
+    return null;
+  }
+
+  const rect = renderer.domElement.getBoundingClientRect();
+  const pointerX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  const pointerY = -(((event.clientY - rect.top) / rect.height) * 2 - 1);
+
+  sceneClickPointer.set(pointerX, pointerY);
+  sceneClickRaycaster.setFromCamera(sceneClickPointer, camera);
+
+  for (const root of searchRoots) {
+    const hits = sceneClickRaycaster.intersectObjects(root.children, true);
+    for (let i = 0; i < hits.length; i += 1) {
+      let target = hits[i].object;
+      while (target && !Array.isArray(target.userData?.dialogue)) {
+        target = target.parent;
+      }
+
+      if (target && Array.isArray(target.userData.dialogue)) {
+        return target;
+      }
+    }
+  }
+
+  return null;
+}
+
+function handleScenePointerDown(event) {
+  const target = getDialogueTargetFromPointerEvent(event);
+  if (target) {
+    selectPersonWithDialogue(target.userData.dialogueId || target.uuid, target.userData.dialogue.join('\n'));
+    setHoveredPerson(target.userData.dialogueId || target.uuid);
+  }
+}
+
+function handleScenePointerMove(event) {
+  const target = getDialogueTargetFromPointerEvent(event);
+  hoveredDialogueTarget = target;
+
+  if (renderer?.domElement) {
+    renderer.domElement.style.cursor = target ? 'pointer' : 'default';
+  }
+
+  setHoveredPerson(target ? (target.userData.dialogueId || target.uuid) : null);
+}
+
+function handleScenePointerLeave() {
+  hoveredDialogueTarget = null;
+  if (renderer?.domElement) {
+    renderer.domElement.style.cursor = 'default';
+  }
+  setHoveredPerson(null);
 }
 
 /**
@@ -3609,6 +7299,26 @@ export function loadScene(sceneData) {
     return;
   }
 
+  if (scene2Runtime && sceneData.id !== 2) {
+    clearScene2Environment();
+  }
+
+  if (scene3Runtime && sceneData.id !== 3) {
+    clearScene3Environment();
+  }
+
+  if (scene4Runtime && sceneData.id !== 4) {
+    scene.remove(scene4Runtime.root);
+    disposeObject3D(scene4Runtime.root);
+    scene4Runtime = null;
+  }
+
+  if (scene5Runtime && sceneData.id !== 5) {
+    scene.remove(scene5Runtime.root);
+    disposeObject3D(scene5Runtime.root);
+    scene5Runtime = null;
+  }
+
   const incomingSceneIndex = Number.isFinite(sceneData.id) ? sceneData.id : 0;
   const previousSceneIndex = currentSceneIndex;
   const previousScene0Root = scene0Runtime ? scene0Runtime.root : null;
@@ -3627,10 +7337,32 @@ export function loadScene(sceneData) {
     scene1Runtime = null;
   }
 
+  if (incomingSceneIndex === 2 && !scene2Runtime) {
+    applyScene2Environment();
+  }
+
+  if (incomingSceneIndex === 3 && !scene3Runtime) {
+    applyScene3Environment();
+  }
+
   currentSceneIndex = incomingSceneIndex;
 
   // Set camera position and target
-  const { pos, target } = sceneData.camera;
+  let { pos, target } = sceneData.camera;
+  if (incomingSceneIndex === 2) {
+    // Human-height viewpoint inside the protest crowd, looking toward the military line.
+    pos = [-5.4, 1.7, -4.0];
+    target = [-4.0, 1.55, -19.6];
+  } else if (incomingSceneIndex === 3) {
+    pos = [-20, 12, -30];
+    target = [0, 2, 0];
+  } else if (incomingSceneIndex === 4) {
+    pos = [-25, 14, -35];
+    target = [0, 2, 5];
+  } else if (incomingSceneIndex === 5) {
+    pos = [40, 35, 50];
+    target = [5, 0, 5];
+  }
   const startPos = camera.position.clone();
   const endPos = new THREE.Vector3(...pos);
   const endTarget = new THREE.Vector3(...target);
@@ -3644,6 +7376,12 @@ export function loadScene(sceneData) {
   } else {
     // Create new objects
     sceneData.objects.forEach((objDef, idx) => {
+      // Scene 2, Scene 3, Scene 4, and Scene 5 use fully custom runtime environments.
+      // Skip base terrain/water props there to avoid duplicate planes and placeholder blocks.
+      if ((incomingSceneIndex === 2 || incomingSceneIndex === 3 || incomingSceneIndex === 4 || incomingSceneIndex === 5) && (objDef.type === 'terrain' || objDef.type === 'water' || objDef.type === 'props')) {
+        return;
+      }
+
       const mesh = createGeometry(objDef);
       if (objDef.position) {
         mesh.position.set(...objDef.position);
@@ -3672,6 +7410,14 @@ export function loadScene(sceneData) {
       scene1Runtime.root.position.y = isScene0To1Transition ? -30 : 0;
       sceneObjects['scene1-root'] = scene1Runtime.root;
       transitionTargetRoot = scene1Runtime.root;
+    } else if (incomingSceneIndex === 4) {
+      scene4Runtime = buildScene5System();
+      scene.add(scene4Runtime.root);
+      sceneObjects['scene4-root'] = scene4Runtime.root;
+    } else if (incomingSceneIndex === 5) {
+      scene5Runtime = buildScene6System();
+      scene.add(scene5Runtime.root);
+      sceneObjects['scene5-root'] = scene5Runtime.root;
     }
   }
 
@@ -3713,10 +7459,26 @@ export function loadScene(sceneData) {
           scene0Controls.minDistance = 6;
           scene0Controls.maxDistance = 62;
           scene0Controls.target.set(0, 6, -20);
+        } else if (currentSceneIndex === 2) {
+          scene0Controls.minDistance = 2.2;
+          scene0Controls.maxDistance = 12;
+          scene0Controls.target.set(-4.0, 1.55, -19.6);
+        } else if (currentSceneIndex === 3) {
+          scene0Controls.minDistance = 8;
+          scene0Controls.maxDistance = 50;
+          scene0Controls.target.set(0, 2, 0);
+        } else if (currentSceneIndex === 4) {
+          scene0Controls.minDistance = 5;
+          scene0Controls.maxDistance = 55;
+          scene0Controls.target.set(0, 2, 5);
+        } else if (currentSceneIndex === 5) {
+          scene0Controls.minDistance = 20;
+          scene0Controls.maxDistance = 80;
+          scene0Controls.target.set(5, 0, 5);
         } else {
-          scene0Controls.minDistance = 18;
-          scene0Controls.maxDistance = 78;
-          scene0Controls.target.set(0, 8, 0);
+          scene0Controls.minDistance = 6;
+          scene0Controls.maxDistance = 90;
+          scene0Controls.target.copy(endTarget);
         }
       }
 
@@ -3777,6 +7539,14 @@ export function cleanupThreeJS() {
   if (animationFrameId) {
     cancelAnimationFrame(animationFrameId);
   }
+  if (renderer?.domElement) {
+    renderer.domElement.removeEventListener('pointerdown', handleScenePointerDown);
+    renderer.domElement.removeEventListener('pointermove', handleScenePointerMove);
+    renderer.domElement.removeEventListener('pointerleave', handleScenePointerLeave);
+    renderer.domElement.style.cursor = 'default';
+  }
+  hoveredDialogueTarget = null;
+  setHoveredPerson(null);
   window.removeEventListener('resize', onWindowResize);
   if (scene0Controls) {
     scene0Controls.dispose();

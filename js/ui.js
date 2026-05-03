@@ -4,6 +4,7 @@
  */
 
 let isPanelOpen = false;
+let dragGesture = null;
 
 /**
  * Initialize UI components
@@ -45,6 +46,37 @@ export function setupDragUpListener() {
   const sceneLabel = document.getElementById('scene-label');
   const textPanel = document.getElementById('text-panel');
 
+  const clearDragGesture = () => {
+    dragGesture = null;
+  };
+
+  const handleDragMove = (event) => {
+    if (!dragGesture || event.pointerId !== dragGesture.pointerId) {
+      return;
+    }
+
+    const deltaX = event.clientX - dragGesture.startX;
+    const deltaY = event.clientY - dragGesture.startY;
+
+    if (!dragGesture.opened && deltaY <= -36 && Math.abs(deltaY) > Math.abs(deltaX)) {
+      dragGesture.opened = true;
+      dragGesture.suppressNextClick = true;
+      openTextPanel();
+    }
+  };
+
+  const handleDragEnd = (event) => {
+    if (!dragGesture || event.pointerId !== dragGesture.pointerId) {
+      return;
+    }
+
+    if (dragGesture.opened) {
+      dragGesture.suppressNextClick = true;
+    }
+
+    clearDragGesture();
+  };
+
   // Close button
   if (closeBtn) {
     closeBtn.addEventListener('click', (e) => {
@@ -60,8 +92,27 @@ export function setupDragUpListener() {
   // Scene label click opens panel
   if (sceneLabel) {
     sceneLabel.addEventListener('click', (e) => {
+      if (dragGesture?.suppressNextClick) {
+        dragGesture.suppressNextClick = false;
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       e.stopPropagation();
       openTextPanel();
+    });
+    sceneLabel.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) {
+        return;
+      }
+
+      dragGesture = {
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        opened: false,
+        suppressNextClick: false
+      };
     });
     sceneLabel.addEventListener('touchend', (e) => {
       e.stopPropagation();
@@ -87,6 +138,9 @@ export function setupDragUpListener() {
 
   document.addEventListener('click', closeIfOutsidePanel);
   document.addEventListener('touchend', closeIfOutsidePanel);
+  document.addEventListener('pointermove', handleDragMove);
+  document.addEventListener('pointerup', handleDragEnd);
+  document.addEventListener('pointercancel', handleDragEnd);
 
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && isPanelOpen) {
@@ -104,6 +158,8 @@ export function openTextPanel() {
   const textPanel = document.getElementById('text-panel');
   const sceneLabel = document.getElementById('scene-label');
   const metricsWidget = document.getElementById('metrics-widget');
+
+  dragGesture = null;
 
   if (textPanel) {
     textPanel.classList.add('open');

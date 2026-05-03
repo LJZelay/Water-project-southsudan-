@@ -59,11 +59,7 @@ const handleKeyboard = debounce((event) => {
  * Go to next scene
  */
 export function goToNextScene() {
-  if (currentSceneIndex === 1) {
-    window.location.href = '/coming-soon.html';
-    return;
-  }
-  if (isNavigating || currentSceneIndex >= MAX_SCENES - 1) return;
+  if (currentSceneIndex >= MAX_SCENES - 1) return;
   goToScene(currentSceneIndex + 1);
 }
 

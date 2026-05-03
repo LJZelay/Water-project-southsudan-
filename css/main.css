@@ -142,6 +142,7 @@ body:not(.experience-started) .main-viewport {
   display: block;
   width: 100%;
   height: 100%;
+  touch-action: none;
 }
 
 .fallback-image {
@@ -152,6 +153,22 @@ body:not(.experience-started) .main-viewport {
   position: absolute;
   top: 0;
   left: 0;
+}
+
+.r3f-canvas-root {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.r3f-canvas-root canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 /* ============================================
@@ -179,6 +196,8 @@ body:not(.experience-started) .main-viewport {
   animation: slideUp 0.5s ease;
   transition: opacity 0.3s ease;
   cursor: pointer;
+  user-select: none;
+  touch-action: none;
 }
 
 .scene-label * {
@@ -230,6 +249,9 @@ body:not(.experience-started) .main-viewport {
   background: linear-gradient(180deg, rgba(10, 14, 39, 0.98) 0%, rgba(10, 14, 39, 0.95) 100%);
   border-top: 2px solid rgba(74, 144, 226, 0.3);
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
   z-index: 700;
   transition: max-height 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
@@ -247,6 +269,7 @@ body:not(.experience-started) .main-viewport {
   border-bottom: 1px solid rgba(74, 144, 226, 0.2);
   background: rgba(5, 10, 24, 0.98);
   z-index: 20;
+  touch-action: none;
 }
 
 .close-panel {

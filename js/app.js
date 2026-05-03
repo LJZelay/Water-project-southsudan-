@@ -6,6 +6,7 @@
 import { scenes, getScene } from './scenes.js';
 import { initThreeJS, loadScene, updateFallbackImage, isSceneTransitioning, cleanupThreeJS, applyLiveWeatherToScene } from './three-init.js';
 import { initNavigation, getCurrentSceneIndex, cleanupNavigation } from './navigation.js';
+import { setSceneState } from './sceneState.js';
 import { initUI, updatePanelForScene, setupDragUpListener, setupMetricsToggle, closeTextPanel } from './ui.js';
 import { isWebGLSupported } from './utils.js';
 import {
@@ -53,7 +54,7 @@ function getInitialSceneIndex() {
     return 0;
   }
 
-  if (parsed > 1) {
+  if (parsed > 5) {
     window.location.replace('/coming-soon.html');
     return 0;
   }
@@ -147,6 +148,10 @@ async function initApp() {
     const success = initThreeJS();
     if (!success) {
       webglAvailable = false;
+    } else if (document.getElementById('r3f-canvas-root')) {
+      import('./experience-r3f.jsx').catch((err) => {
+        console.warn('Failed to load R3F experience overlay:', err);
+      });
     }
   }
 
@@ -203,6 +208,12 @@ function onSceneChange(sceneIndex) {
   // Load Three.js scene or update fallback
   if (webglAvailable) {
     loadScene(sceneData);
+    // Mirror current scene index into shared scene state so React components can react
+    try {
+      setSceneState({ currentSceneIndex: sceneIndex });
+    } catch (err) {
+      // ignore
+    }
   } else {
     updateFallbackImage(sceneIndex);
   }

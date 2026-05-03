@@ -164,31 +164,6 @@ export const scenes = [
   },
   {
     id: 5,
-    title: "The Broken Sponge",
-    shortLabel: "Microclimate Collapse",
-    hint: "▲ Drag up to read analysis",
-    textContent: `
-      <p>By the 1990s–2000s, ecological damage from partial canal construction became measurable. The wetland's hydrological function—acting as a "sponge" to absorb and gradually release floodwaters—was compromised. Temperature records showed a 2–4°C rise in surrounding areas; humidity dropped 15–20% seasonally. Vegetation die-off exposed previously waterlogged soils to rapid evaporation.</p>
-      <p>The fragmented landscape could no longer moderate flood peaks or sustain the dry-season moisture buffers that pastoralist communities depended on. Nomadic routes contracted; dry-season grazing grounds shrank; pastoral wealth (cattle) became concentrated in smaller areas, accelerating overgrazing and soil degradation.</p>
-      <p>The broken sponge sends moisture skyward rather than storing it—a metaphor for how partial, incomplete development can destroy a system without replacing its functions.</p>
-    `,
-    camera: { pos: [0, 60, 50], target: [0, 0, 20] },
-    objects: [
-      { type: 'terrain', id: 'degraded-plain', geometry: 'plane', scale: [200, 200], position: [0, 0, 0], color: 0xA68860, animated: false },
-      { type: 'water', id: 'shrinking-wetland', geometry: 'plane', position: [0, 0.2, 0], scale: [50, 80], color: 0x6B8FC7 },
-      { type: 'vegetation', id: 'dead-vegetation', geometry: 'plane', position: [-60, 0, -60], scale: [50, 50], color: 0x8B7355 },
-      { type: 'animation', name: 'evaporation-particles', position: [0, 5, 0], tag: 'climate-loss' },
-      { type: 'character', name: 'herder-struggling', position: [70, 0, 30], animation: 'walking-searching' }
-    ],
-    metrics: {
-      temperature: "30°C",
-      humidity: "62%",
-      evaporation: "8.1 mm/day",
-      disease: "High"
-    }
-  },
-  {
-    id: 6,
     title: "The Ditch That Still Bleeds",
     shortLabel: "Legacy of Broken Promises",
     hint: "▲ Drag up to read analysis",
@@ -212,32 +187,6 @@ export const scenes = [
       disease: "High"
     }
   },
-  {
-    id: 7,
-    title: "Will We Listen?",
-    shortLabel: "Synthesis & Call to Action",
-    hint: "▲ Drag up to read analysis",
-    textContent: `
-      <p>The Jonglei Canal presents a case of technocratic failure: ignorance of local ecological knowledge, suppression of dissenting voices, and displacement of decision-making from affected communities to distant capitols and development institutions. It also presents a case of economic injustice: the Sudd's value was misframed as "waste," its destruction justified as progress, its recovery now deemed a luxury rather than a restitution.</p>
-      <p>Yet it also demonstrates resilience and resistance. Community action, SPLA military pressure, and later civil society advocacy slowed, halted, and catalyzed genuine questioning of the project. The concept of "water rent"—the economic value appropriated by downstream beneficiaries—reframes the wetlands not as empty but as productive, not as wasteful but as a commons stolen.</p>
-      <p>This exhibition asks viewers: How do we listen to landscapes and the people embedded in them? How do we weigh technocratic expertise against lived experience? And when development schemes threaten commons, what obligations do external actors have?</p>
-    `,
-    camera: { pos: [0, 70, 100], target: [0, 0, 0] },
-    objects: [
-      { type: 'terrain', id: 'panoramic-view', geometry: 'plane', scale: [250, 250], position: [0, 0, 0], color: 0x7D8B6F },
-      { type: 'water', id: 'recovering-wetland', geometry: 'plane', position: [0, 0.5, -20], scale: [60, 100], color: 0x5A9BB4, animated: true },
-      { type: 'vegetation', id: 'regrowth', geometry: 'plane', position: [-70, 0, -30], scale: [60, 80], color: 0x7BA82F },
-      { type: 'character', name: 'youth-1', position: [-30, 0, 50], animation: 'walking-forward' },
-      { type: 'character', name: 'elder-2', position: [30, 0, 50], animation: 'standing-reflective' },
-      { type: 'props', name: 'cta-symbol', position: [0, 5, 0], tag: 'listen-symbol' }
-    ],
-    metrics: {
-      temperature: "24°C",
-      humidity: "80%",
-      evaporation: "4.5 mm/day",
-      disease: "Moderate"
-    }
-  }
 ];
 
 export function getScene(sceneIndex) {
