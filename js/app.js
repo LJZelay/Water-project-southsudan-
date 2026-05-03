@@ -205,6 +205,9 @@ function onSceneChange(sceneIndex) {
   updateProgressBar(sceneIndex);
   updateSceneTitle(sceneData);
 
+  // Scene 5 uses a static narrative page instead of the 3D canvas
+  applyScene5StaticMode(sceneIndex);
+
   // Load Three.js scene or update fallback
   if (webglAvailable) {
     loadScene(sceneData);
@@ -231,6 +234,27 @@ function onSceneChange(sceneIndex) {
   updateSceneLabel(sceneData);
 
   console.log(`Scene ${sceneIndex}: ${sceneData.title}`);
+}
+
+/**
+ * Show/hide the Scene 5 static narrative page and toggle the 3D canvas accordingly
+ */
+function applyScene5StaticMode(sceneIndex) {
+  const canvasContainer = document.getElementById('canvas-container');
+  const scene5Static = document.getElementById('scene5-static');
+  const isScene5 = sceneIndex === 5;
+
+  if (canvasContainer) {
+    canvasContainer.style.display = isScene5 ? 'none' : '';
+  }
+
+  if (scene5Static) {
+    if (isScene5) {
+      scene5Static.classList.remove('hidden');
+    } else {
+      scene5Static.classList.add('hidden');
+    }
+  }
 }
 
 /**
