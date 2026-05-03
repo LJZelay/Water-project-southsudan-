@@ -4986,40 +4986,36 @@ function updateScene4(deltaSeconds, elapsedTime) {
 function updateScene5(deltaSeconds, elapsedTime) {
   if (!scene4Runtime) return;
 
-  // Gently sway the South Sudan flag
-  if (Array.isArray(scene4Runtime.flags)) {
-    scene4Runtime.flags.forEach((flag, idx) => {
-      if (flag.position) {
-        flag.position.x += Math.sin(elapsedTime * 2 + idx * 0.5) * 0.001;
-        flag.position.z += Math.cos(elapsedTime * 1.7 + idx * 0.5) * 0.001;
-      }
-    });
-  }
-
   // Subtle crowd bob
   if (Array.isArray(scene4Runtime.crowd)) {
-    scene4Runtime.crowd.forEach((person) => {
+    scene4Runtime.crowd.forEach((person, idx) => {
       if (!person.userData.baseY) person.userData.baseY = person.position.y;
-      person.position.y = person.userData.baseY + Math.sin(elapsedTime * 2.5 + person.id) * 0.005;
+      person.position.y = person.userData.baseY + Math.sin(elapsedTime * 2.5 + idx * 0.7) * 0.005;
     });
   }
 
-  // Rotate suspended rocks slowly
-  if (Array.isArray(scene4Runtime.rocks)) {
-    scene4Runtime.rocks.forEach(rock => {
-      rock.rotation.y += deltaSeconds * 0.2;
-      rock.rotation.x += deltaSeconds * 0.15;
+  // Animate flying rocks on parabolic arc (loop continuously)
+  if (Array.isArray(scene4Runtime.flyingRocks)) {
+    scene4Runtime.flyingRocks.forEach((rock) => {
+      rock.t += rock.speed * deltaSeconds;
+      if (rock.t > 1) rock.t -= 1; // loop
+      const t = rock.t;
+      // Lerp x/z, arc height via parabola
+      rock.mesh.position.x = rock.startX + (rock.endX - rock.startX) * t;
+      rock.mesh.position.z = rock.startZ + (rock.endZ - rock.startZ) * t;
+      rock.mesh.position.y = 1.8 + rock.arcHeight * 4 * t * (1 - t);
+      rock.mesh.rotation.x += deltaSeconds * 2.2;
+      rock.mesh.rotation.z += deltaSeconds * 1.8;
     });
   }
 
-  // Animate dust near excavator
-  if (scene4Runtime.dust) {
-    const pos = scene4Runtime.dust.geometry.attributes.position.array;
-    for (let i = 0; i < pos.length; i += 3) {
-      pos[i + 1] += deltaSeconds * 0.3;
-      if (pos[i + 1] > 6) pos[i + 1] = 2.5;
-    }
-    scene4Runtime.dust.geometry.attributes.position.needsUpdate = true;
+  // Retreating engineers slowly back away
+  if (Array.isArray(scene4Runtime.engineers)) {
+    scene4Runtime.engineers.forEach((eng) => {
+      const baseZ = eng.userData.retreatBaseZ || 0;
+      const retreatZ = baseZ + Math.sin(elapsedTime * 0.4 + baseZ) * 0.08;
+      eng.position.z = retreatZ;
+    });
   }
 }
 
