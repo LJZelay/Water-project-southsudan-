@@ -3887,7 +3887,8 @@ function buildScene5System() {
   // === ABANDONED BWE (scaled to 0.6) ===
   const bwe = createImmersiveBWE();
   bwe.scale.setScalar(0.6);
-  bwe.position.set(5, 0, 12);
+  // Ground the BWE on the terrain (terrain y ≈ 0.08 at x=5, z=12)
+  bwe.position.set(5, 0.08, 12);
   // Raise boom
   if (bwe.userData?.boom) {
     bwe.userData.boom.rotation.x = -0.3;
@@ -3900,7 +3901,7 @@ function buildScene5System() {
     );
     brokenWindow.position.set(0.15, 0.1, -0.15);
     bwe.userData.cabin.add(brokenWindow);
-    
+
     const crackCylinder = new THREE.Mesh(
       new THREE.CylinderGeometry(0.02, 0.02, 0.4, 4),
       new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.6, metalness: 0.1 })
@@ -3909,6 +3910,70 @@ function buildScene5System() {
     crackCylinder.position.set(0.08, 0.15, -0.12);
     bwe.userData.cabin.add(crackCylinder);
   }
+
+  // === SOUTH SUDAN FLAG ON TOP OF EXCAVATOR ===
+  // BWE chassis deck is at local y=5.5, scaled by 0.6 → world y = 0.08 + 3.3 = 3.38
+  const bweTopY = 0.08 + 5.5 * 0.6; // ≈ 3.38
+  const flagGroup = new THREE.Group();
+
+  const flagPoleMesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.08, 0.08, 3.0, 6),
+    new THREE.MeshStandardMaterial({ color: 0x555555, roughness: 0.6, metalness: 0.3 })
+  );
+  flagPoleMesh.position.y = 1.5;
+  flagGroup.add(flagPoleMesh);
+
+  // South Sudan flag stripes (black top, red mid, green bottom)
+  const flagStripeData = [
+    { color: 0x000000, yOff: 0.55 },
+    { color: 0xbb0000, yOff: 0.20 },
+    { color: 0x009900, yOff: -0.15 }
+  ];
+  flagStripeData.forEach(({ color, yOff }) => {
+    const stripe = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.4, 0.35),
+      new THREE.MeshStandardMaterial({ color, roughness: 0.7, side: THREE.DoubleSide })
+    );
+    stripe.position.set(0.7, 3.0 + yOff, 0);
+    stripe.rotation.y = 0;
+    flagGroup.add(stripe);
+  });
+
+  // Blue triangle (left side of flag)
+  const blueTriMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.38, 1.05),
+    new THREE.MeshStandardMaterial({ color: 0x0066cc, roughness: 0.7, side: THREE.DoubleSide })
+  );
+  blueTriMesh.position.set(0.19, 3.0 + 0.2, 0);
+  flagGroup.add(blueTriMesh);
+
+  // Yellow star
+  const starMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(0.1, 8, 8),
+    new THREE.MeshStandardMaterial({ color: 0xffcc00, roughness: 0.5, metalness: 0.2 })
+  );
+  starMesh.position.set(0.19, 3.2, 0.05);
+  flagGroup.add(starMesh);
+
+  flagGroup.position.set(5, bweTopY, 12);
+  root.add(flagGroup);
+
+  // === VILLAGER STANDING ON TOP OF EXCAVATOR ===
+  const excavatorVillager = createNiloticHuman({ group: 'Dinka', role: 'carrier', direction: -1 });
+  excavatorVillager.position.set(5, bweTopY + 0.05, 11.8);
+  excavatorVillager.scale.setScalar(1.1);
+  excavatorVillager.rotation.y = Math.PI;
+  // Arms raised in victory/defiance
+  if (excavatorVillager.userData.leftArm) excavatorVillager.userData.leftArm.rotation.x = -Math.PI / 2.2;
+  if (excavatorVillager.userData.rightArm) excavatorVillager.userData.rightArm.rotation.x = -Math.PI / 2.2;
+  excavatorVillager.userData.interactive = true;
+  excavatorVillager.userData.dialogue = [
+    "We stand on the machine that tried to erase us.",
+    "This is our victory — hard won, never forgotten."
+  ];
+  excavatorVillager.userData.dialogueId = 'scene5-excavator-villager';
+  root.add(excavatorVillager);
+
   root.add(bwe);
 
   // === GUARD POSTS (Watchtowers) ===
@@ -3993,23 +4058,36 @@ function buildScene5System() {
     }
   }
 
-  // === KNEELING ENGINEERS ===
-  const kneelers = [];
-  const kneelPositions = [[2, 0.1, 8], [2.5, 0.1, 8.5]];
-  
-  kneelPositions.forEach(([px, py, pz], idx) => {
-    const engineer = createKneelingEngineer();
+  // === RETREATING ENGINEERS (afraid, backing away from villagers) ===
+  const engineers = [];
+  const engineerPositions = [
+    [0.5, 0.12, 4.5],
+    [2.0, 0.1, 3.8],
+    [-1.2, 0.11, 5.0]
+  ];
+
+  engineerPositions.forEach(([px, py, pz], idx) => {
+    const engineer = createRefinedEngineer({ hasPapers: idx === 0 });
     engineer.position.set(px, py, pz);
     engineer.scale.setScalar(1.3);
-    
+    // Face away from villagers (retreating toward viewer)
+    engineer.rotation.y = Math.PI;
+    // Fear pose: arms slightly raised, torso bent back
+    if (engineer.userData.leftLeg) {
+      engineer.userData.leftLeg.rotation.x = idx % 2 === 0 ? 0.3 : -0.3;
+    }
+    if (engineer.userData.rightLeg) {
+      engineer.userData.rightLeg.rotation.x = idx % 2 === 0 ? -0.3 : 0.3;
+    }
     engineer.userData.interactive = true;
     engineer.userData.dialogue = [
       "The engineers who built this—some of us did not believe in it.",
       "But the orders came from above. We had no choice but to comply."
     ];
     engineer.userData.dialogueId = `scene5-engineer-${idx}`;
+    engineer.userData.retreatBaseZ = pz;
     root.add(engineer);
-    kneelers.push(engineer);
+    engineers.push(engineer);
   });
 
   // === GUARD BEHIND ENGINEERS (with rifle) ===
@@ -4181,34 +4259,99 @@ function buildScene5System() {
     root.add(thrower);
   }
 
-  // === CHEERING CROWD (semicircle) ===
+  // === SPEAR-ARMED VILLAGER CROWD (facing engineers) ===
   const crowd = [];
-  const crowdCenter = new THREE.Vector3(0, 0, 3);
-  const crowdRadius = 8;
-  for (let i = 0; i < 8; i += 1) {
-    const angle = (i / 8) * Math.PI;
-    const x = crowdCenter.x + Math.sin(angle) * crowdRadius;
-    const z = crowdCenter.z - Math.cos(angle) * crowdRadius;
-    
-    const villager = createNiloticHuman({
-      group: i % 2 === 0 ? 'Dinka' : 'Nuer',
-      role: 'fisher',
-      direction: 1
-    });
-    villager.position.set(x, 0.1, z);
-    villager.scale.setScalar(1.5);
-    villager.rotation.y = Math.atan2(-z, -x);
-    
-    // Arms up
-    if (villager.userData) {
-      if (villager.userData.leftArm) villager.userData.leftArm.rotation.x = -Math.PI / 2.2;
-      if (villager.userData.rightArm) villager.userData.rightArm.rotation.x = -Math.PI / 2.2;
-    }
-    
+  // Front line: spear holders pointing at engineers
+  const spearVillagerConfigs = [
+    { x: -6, z: 8, group: 'Dinka' },
+    { x: -3, z: 7.5, group: 'Nuer' },
+    { x: 0, z: 7, group: 'Dinka' },
+    { x: 3, z: 7.5, group: 'Nuer' },
+    { x: 6, z: 8, group: 'Dinka' }
+  ];
+
+  spearVillagerConfigs.forEach(({ x, z, group }, idx) => {
+    const villager = createNiloticHuman({ group, role: 'carrier', direction: -1 });
+    villager.position.set(x, 0.12, z);
+    villager.scale.setScalar(1.4);
+    // Face toward engineers (negative z direction)
+    villager.rotation.y = Math.PI;
+
+    // Attach spear pointed toward engineers
+    const spear = createSpear();
+    spear.rotation.x = -Math.PI / 2 + 0.3; // Tip angled toward engineers
+    spear.rotation.z = (idx % 2 === 0 ? -0.15 : 0.15);
+    spear.position.set(0.35, 1.2, -0.2);
+    villager.add(spear);
+
+    // Threat stance: right arm extended forward holding spear
+    if (villager.userData.rightArm) villager.userData.rightArm.rotation.x = -0.9;
+    if (villager.userData.leftArm) villager.userData.leftArm.rotation.x = -0.5;
+
+    villager.userData.interactive = true;
+    villager.userData.dialogue = [
+      "This is our land and our water. No machine will take it.",
+      "We stand together — Dinka, Nuer, united against this injustice."
+    ];
+    villager.userData.dialogueId = `scene5-spear-villager-${idx}`;
     villager.userData.baseY = villager.position.y;
     root.add(villager);
     crowd.push(villager);
-  }
+  });
+
+  // Back line: rock throwers (on ground, raising arms)
+  const rockThrowerVillagers = [
+    { x: -8, z: 9.5, group: 'Nuer' },
+    { x: 8, z: 9.5, group: 'Dinka' },
+    { x: -2, z: 10, group: 'Nuer' },
+    { x: 4, z: 10, group: 'Dinka' }
+  ];
+
+  rockThrowerVillagers.forEach(({ x, z, group }, idx) => {
+    const thrower = createNiloticHuman({ group, role: 'fisher', direction: -1 });
+    thrower.position.set(x, 0.12, z);
+    thrower.scale.setScalar(1.3);
+    thrower.rotation.y = Math.PI;
+    // Throwing arm raised
+    if (thrower.userData.rightArm) thrower.userData.rightArm.rotation.x = -Math.PI / 1.4;
+    if (thrower.userData.leftArm) thrower.userData.leftArm.rotation.x = -0.3;
+
+    thrower.userData.interactive = true;
+    thrower.userData.dialogue = [
+      "Every rock thrown carries a generation of anger.",
+      "They drained our wetland. Now we reclaim our dignity."
+    ];
+    thrower.userData.dialogueId = `scene5-ground-thrower-${idx}`;
+    thrower.userData.baseY = thrower.position.y;
+    root.add(thrower);
+    crowd.push(thrower);
+  });
+
+  // === ANIMATED FLYING ROCKS (arc trajectory toward engineers/excavator) ===
+  const flyingRocks = [];
+  const rockTargets = [
+    { startX: -7, startZ: 9, endX: 0.5, endZ: 4.5, height: 4.5 },  // toward engineer 0
+    { startX: 4, startZ: 10, endX: 2.0, endZ: 3.8, height: 4.0 },   // toward engineer 1
+    { startX: -2, startZ: 10, endX: 5, endZ: 12, height: 5.5 },      // toward excavator
+    { startX: 8, startZ: 9.5, endX: 4, endZ: 12, height: 4.8 }       // toward excavator
+  ];
+
+  const rockMat = new THREE.MeshStandardMaterial({ color: 0x8a7a6a, roughness: 0.85, metalness: 0.1 });
+  rockTargets.forEach(({ startX, startZ, endX, endZ, height }, idx) => {
+    const rockMesh = new THREE.Mesh(new THREE.IcosahedronGeometry(0.22), rockMat);
+    rockMesh.castShadow = true;
+    // Start position
+    rockMesh.position.set(startX, 1.8, startZ);
+    root.add(rockMesh);
+    flyingRocks.push({
+      mesh: rockMesh,
+      startX, startZ,
+      endX, endZ,
+      arcHeight: height,
+      t: (idx / rockTargets.length),  // stagger start times
+      speed: 0.28 + idx * 0.04
+    });
+  });
 
   // === DESTROYED EQUIPMENT (scattered crates) ===
   for (let i = 0; i < 5; i += 1) {
@@ -4242,11 +4385,10 @@ function buildScene5System() {
   barrier.userData.dialogueId = 'scene5-barrier';
   root.add(barrier);
 
-  // === SCATTERED ROCKS ===
+  // === SCATTERED ROCKS (ground level) ===
   for (let i = 0; i < 8; i += 1) {
-    const rockGeom = new THREE.IcosahedronGeometry(0.35);
     const rock = new THREE.Mesh(
-      rockGeom,
+      new THREE.IcosahedronGeometry(0.35),
       new THREE.MeshStandardMaterial({ color: 0x8a7a6a, roughness: 0.85, metalness: 0.1 })
     );
     rock.position.set(2 + (Math.random() - 0.5) * 12, 0.3, 10 + (Math.random() - 0.5) * 6);
@@ -4259,6 +4401,60 @@ function buildScene5System() {
     rock.userData.dialogueId = `scene5-rock-${i}`;
     root.add(rock);
   }
+
+  // === POLLUTED TREES (dead/sickly appearance at scene edges) ===
+  const pollutedTreeSeeds = [
+    { x: -18, z: -5 }, { x: 16, z: -8 }, { x: -22, z: 15 },
+    { x: 20, z: 18 }, { x: -12, z: 20 }, { x: 14, z: -16 },
+    { x: -8, z: -14 }, { x: 22, z: 4 }
+  ];
+  pollutedTreeSeeds.forEach(({ x, z }) => {
+    const tree = createVillageTree({ ghostTree: true });
+    tree.scale.setScalar(0.48);
+    const ty = -0.1 + Math.sin(x * 0.12) * 0.25 + Math.cos(z * 0.1) * 0.2;
+    tree.position.set(x, ty, z);
+    root.add(tree);
+  });
+
+  // === MUDDY WATER PUDDLES ===
+  const puddleSeeds = [
+    { x: -4, z: 6 }, { x: 7, z: 5 }, { x: -9, z: 2 },
+    { x: 3, z: 2.5 }, { x: 10, z: 7 }, { x: -6, z: 14 }
+  ];
+  puddleSeeds.forEach(({ x, z }) => {
+    const radius = 0.6 + Math.random() * 0.8;
+    const puddle = new THREE.Mesh(
+      new THREE.CircleGeometry(radius, 20),
+      new THREE.MeshStandardMaterial({
+        color: 0x3a2e24,
+        roughness: 0.6,
+        metalness: 0.1,
+        transparent: true,
+        opacity: 0.78
+      })
+    );
+    puddle.rotation.x = -Math.PI / 2;
+    const ty = -0.1 + Math.sin(x * 0.12) * 0.25 + Math.cos(z * 0.1) * 0.2;
+    puddle.position.set(x, ty + 0.02, z);
+    root.add(puddle);
+  });
+
+  // === VILLAGE HOUSES (background, consistent with other scenes) ===
+  const houseConfigs = [
+    { x: -20, z: -10, rot: 0.3 },
+    { x: -17, z: -16, rot: -0.5 },
+    { x: 18, z: -12, rot: 1.1 },
+    { x: 22, z: -18, rot: -0.2 },
+    { x: -14, z: 22, rot: 0.8 }
+  ];
+  houseConfigs.forEach(({ x, z, rot }) => {
+    const hut = createCircularHut({ wallRadius: 1.8, wallHeight: 1.8, roofHeight: 2.0, fenceCount: 8 });
+    hut.scale.setScalar(0.55);
+    const ty = -0.1 + Math.sin(x * 0.12) * 0.25 + Math.cos(z * 0.1) * 0.2;
+    hut.position.set(x, ty, z);
+    hut.rotation.y = rot;
+    root.add(hut);
+  });
 
   // === LIGHTING ===
   const directionalLight = new THREE.DirectionalLight(0xbbaf8a, 0.6);
@@ -4277,6 +4473,8 @@ function buildScene5System() {
   return {
     root,
     crowd,
+    engineers,
+    flyingRocks,
     rocks: [],
     flags: [],
     dust: null,
@@ -4788,40 +4986,36 @@ function updateScene4(deltaSeconds, elapsedTime) {
 function updateScene5(deltaSeconds, elapsedTime) {
   if (!scene4Runtime) return;
 
-  // Gently sway the South Sudan flag
-  if (Array.isArray(scene4Runtime.flags)) {
-    scene4Runtime.flags.forEach((flag, idx) => {
-      if (flag.position) {
-        flag.position.x += Math.sin(elapsedTime * 2 + idx * 0.5) * 0.001;
-        flag.position.z += Math.cos(elapsedTime * 1.7 + idx * 0.5) * 0.001;
-      }
-    });
-  }
-
   // Subtle crowd bob
   if (Array.isArray(scene4Runtime.crowd)) {
-    scene4Runtime.crowd.forEach((person) => {
+    scene4Runtime.crowd.forEach((person, idx) => {
       if (!person.userData.baseY) person.userData.baseY = person.position.y;
-      person.position.y = person.userData.baseY + Math.sin(elapsedTime * 2.5 + person.id) * 0.005;
+      person.position.y = person.userData.baseY + Math.sin(elapsedTime * 2.5 + idx * 0.7) * 0.005;
     });
   }
 
-  // Rotate suspended rocks slowly
-  if (Array.isArray(scene4Runtime.rocks)) {
-    scene4Runtime.rocks.forEach(rock => {
-      rock.rotation.y += deltaSeconds * 0.2;
-      rock.rotation.x += deltaSeconds * 0.15;
+  // Animate flying rocks on parabolic arc (loop continuously)
+  if (Array.isArray(scene4Runtime.flyingRocks)) {
+    scene4Runtime.flyingRocks.forEach((rock) => {
+      rock.t += rock.speed * deltaSeconds;
+      if (rock.t > 1) rock.t -= 1; // loop
+      const t = rock.t;
+      // Lerp x/z, arc height via parabola
+      rock.mesh.position.x = rock.startX + (rock.endX - rock.startX) * t;
+      rock.mesh.position.z = rock.startZ + (rock.endZ - rock.startZ) * t;
+      rock.mesh.position.y = 1.8 + rock.arcHeight * 4 * t * (1 - t);
+      rock.mesh.rotation.x += deltaSeconds * 2.2;
+      rock.mesh.rotation.z += deltaSeconds * 1.8;
     });
   }
 
-  // Animate dust near excavator
-  if (scene4Runtime.dust) {
-    const pos = scene4Runtime.dust.geometry.attributes.position.array;
-    for (let i = 0; i < pos.length; i += 3) {
-      pos[i + 1] += deltaSeconds * 0.3;
-      if (pos[i + 1] > 6) pos[i + 1] = 2.5;
-    }
-    scene4Runtime.dust.geometry.attributes.position.needsUpdate = true;
+  // Retreating engineers slowly back away
+  if (Array.isArray(scene4Runtime.engineers)) {
+    scene4Runtime.engineers.forEach((eng) => {
+      const baseZ = eng.userData.retreatBaseZ || 0;
+      const retreatZ = baseZ + Math.sin(elapsedTime * 0.4 + baseZ) * 0.08;
+      eng.position.z = retreatZ;
+    });
   }
 }
 
