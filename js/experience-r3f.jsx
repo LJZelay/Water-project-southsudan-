@@ -3,7 +3,6 @@ import { createRoot } from 'react-dom/client';
 import { Canvas, extend, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls as ThreeOrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { setExternalThreeContext } from './three-init.js';
-import Environment from './Environment.jsx';
 import FlashEffect from './FlashEffect.jsx';
 import Jeep from './Jeep.jsx';
 import MilitaryTruck from './MilitaryTruck.jsx';
@@ -205,9 +204,10 @@ function ExperienceCanvas() {
       </div>
 
     <Canvas
-      id="three-canvas"
+      id="r3f-overlay-canvas"
       camera={{ position: [0, 2, 5], fov: 60 }}
       dpr={[1, 1.25]}
+      gl={{ alpha: true, clearColor: [0, 0, 0, 0] }}
       onCreated={({ scene, camera, gl }) => {
         setExternalThreeContext({
           scene,
@@ -221,10 +221,9 @@ function ExperienceCanvas() {
           window.__resolveR3FBridgeReady = null;
         }
       }}
-      style={{ width: '100%', height: '100%', display: 'block', touchAction: 'none' }}
+      style={{ width: '100%', height: '100%', display: 'block', touchAction: 'none', background: 'transparent' }}
     >
       <SceneControls />
-      <Environment />
       <FlashEffect />
       {currentSceneIndex === 2 && (
         <>

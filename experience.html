@@ -39,9 +39,73 @@
       <canvas id="three-canvas"></canvas>
       <!-- Fallback image (shown if WebGL unavailable) -->
       <img id="fallback-image" class="fallback-image" alt="Fallback visualization of the current Jonglei scene when 3D rendering is unavailable.">
+      <!-- R3F Canvas overlay: dialogue UI + scene 2 vehicles -->
+      <div id="r3f-canvas-root" class="r3f-canvas-root"></div>
     </div>
 
-    <!-- R3F Canvas Container (removed to avoid extra overlay) -->
+    <!-- Scene 5 Static Narrative Page (replaces 3D environment for scene index 5) -->
+    <div id="scene5-static" class="scene5-static hidden">
+      <div class="scene5-inner">
+        <div class="scene5-hero">
+          <div class="scene5-image-placeholder scene5-hero-img" aria-label="Image placeholder: Aerial view of the incomplete Jonglei Canal trench cutting through the Sudd wetland">
+            <span class="placeholder-label">📷 Aerial view of the incomplete Jonglei Canal trench</span>
+          </div>
+          <div class="scene5-headline">
+            <h2 class="scene5-title">The Ditch That Still Bleeds</h2>
+            <p class="scene5-subtitle">The Jonglei Canal's Ongoing Legacy of Ecological Harm &amp; Community Loss</p>
+          </div>
+        </div>
+
+        <div class="scene5-content">
+
+          <section class="scene5-section">
+            <h3 class="scene5-section-title">🌊 Community Impact</h3>
+            <p>The incomplete canal has fractured the pastoral economies of the Dinka, Nuer, and Shilluk peoples who relied on the Sudd's seasonal flood rhythm. Seasonal grazing corridors that sustained millions of cattle for generations have been permanently severed. Families displaced from ancestral wetlands face food insecurity, conflict over shrinking resources, and loss of cultural identity tied to the land.</p>
+            <div class="scene5-image-placeholder" aria-label="Image placeholder: Dinka pastoralist community near the canal trench">
+              <span class="placeholder-label">📷 Dinka pastoralists and the severed grazing corridor</span>
+            </div>
+          </section>
+
+          <section class="scene5-section">
+            <h3 class="scene5-section-title">🌿 Environmental Damage</h3>
+            <p>The unfinished trench disrupts natural water flow across the Sudd, creating stagnant zones that harbor disease vectors while preventing floodwater from reaching downstream wetlands. The canal has fragmented aquatic habitats, accelerating the collapse of the papyrus ecosystem and reducing the wetland's capacity to buffer East Africa's climate. Schistosomiasis rates in canal-adjacent communities surged from under 5% to over 60% within a single generation.</p>
+            <div class="scene5-image-placeholder" aria-label="Image placeholder: Stagnant polluted water near canal trench">
+              <span class="placeholder-label">📷 Stagnant trench water — breeding ground for disease vectors</span>
+            </div>
+          </section>
+
+          <section class="scene5-section">
+            <h3 class="scene5-section-title">📅 Present-Day Harm (2000s–Today)</h3>
+            <p>Decades after construction halted, the Jonglei Canal remains one of the most contested pieces of infrastructure in East Africa. Post-independence South Sudan (2011) inherited both the incomplete canal and its consequences. Ongoing civil conflict has prevented rehabilitation, while international investors continue to eye the project for revival. Civil society organizations, Dinka intellectuals, and global ecologists have converged on a "Save the Sudd" movement, arguing the canal's environmental cost far exceeds any agricultural benefit to downstream nations.</p>
+            <div class="scene5-quote">"The canal was never about South Sudan's water — it was about Egypt's water, built on South Sudan's sacrifice."</div>
+            <div class="scene5-image-placeholder" aria-label="Image placeholder: Save the Sudd advocacy movement gathering">
+              <span class="placeholder-label">📷 Save the Sudd — civil society advocacy, 2010s</span>
+            </div>
+          </section>
+
+          <section class="scene5-section scene5-stats">
+            <h3 class="scene5-section-title">📊 By the Numbers</h3>
+            <div class="scene5-stat-grid">
+              <div class="scene5-stat"><span class="stat-number">360 km</span><span class="stat-label">Planned canal length</span></div>
+              <div class="scene5-stat"><span class="stat-number">~260 km</span><span class="stat-label">Excavated before SPLA halted work</span></div>
+              <div class="scene5-stat"><span class="stat-number">4M+</span><span class="stat-label">People dependent on the Sudd ecosystem</span></div>
+              <div class="scene5-stat"><span class="stat-number">60%+</span><span class="stat-label">Schistosomiasis spike in some villages</span></div>
+              <div class="scene5-stat"><span class="stat-number">40+ yrs</span><span class="stat-label">Canal trench remains open and unhealed</span></div>
+              <div class="scene5-stat"><span class="stat-number">2011</span><span class="stat-label">South Sudan independence — canal still contested</span></div>
+            </div>
+          </section>
+
+          <section class="scene5-section">
+            <h3 class="scene5-section-title">🔬 What Was Sacrificed</h3>
+            <p>The Sudd's slow, potential recovery underscores what was lost: not merely a landscape, but a sophisticated, millennia-old mode of ecological and economic practice. The wetland provided floodwater retention, fisheries productivity, pastoral wealth, and climate regulation for the entire East African region. Its disruption represents a textbook case of technocratic violence — infrastructure imposed without consent, serving distant political ambitions at the cost of local lives.</p>
+            <div class="scene5-image-placeholder" aria-label="Image placeholder: Pre-disruption Sudd wetland landscape">
+              <span class="placeholder-label">📷 The Sudd as it was — a living, breathing ecosystem</span>
+            </div>
+          </section>
+
+        </div>
+      </div>
+    </div>
 
     <!-- Collapsed State Label (visible when panel is closed) -->
     <div class="scene-label" id="scene-label">
