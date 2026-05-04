@@ -43,7 +43,7 @@
                         </summary>
                         <p class="toc-copy">You are entering a world that was never meant to be controlled. A place where water decides the rhythm of life, where land appears and disappears with the seasons, and where entire civilizations move in sync with a living ecosystem. But something is coming... a force that sees this world not as life, but as "waste." A line will be drawn across the wetlands. A system will be broken. And the balance that held everything together will begin to collapse. In this experience, you will witness the rise of the Jonglei Canal, not as a simple project, but as a collision between power and survival, engineering and ecology, control and resistance. The question is not just what happened… but what was lost and what is still at stake.</p>
                         <div class="placeholder-image-container">
-                            <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='200' viewBox='0 0 400 200'%3E%3Crect fill='%23404040' width='400' height='200'/%3E%3Ctext x='50%25' y='50%25' text-anchor='middle' dy='.3em' fill='%23888' font-family='Arial' font-size='16'%3EPlaceholder Image%3C/text%3E%3C/svg%3E" alt="Placeholder" class="placeholder-image">
+                            <img src="https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExdnBoczV1Y3JvNDN0djg3eXp3eDRyMHh4dDhkcGJ3eGZyemJnMjlqYSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/fhAwk4DnqNgw8/giphy.gif" width="100%" height="200" alt="Placeholder" class="placeholder-image">
                         </div>
                     </details>
                 </section>
@@ -129,5 +129,25 @@
 
     <script type="module" src="/js/coming-soon.js"></script>
     <script type="module" src="/js/toc-cards.js"></script>
+        <script>
+            // Toggle the expand button text for details elements
+            (function () {
+                function initExpandoButtons() {
+                    document.querySelectorAll('.toc-expando').forEach((details) => {
+                        const btn = details.querySelector('.expand-button');
+                        if (!btn) return;
+                        const update = () => { btn.textContent = details.open ? 'MINIMIZE' : 'EXPAND'; };
+                        update();
+                        details.addEventListener('toggle', update);
+                    });
+                }
+
+                if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', initExpandoButtons);
+                } else {
+                    initExpandoButtons();
+                }
+            })();
+        </script>
 </body>
 </html>
