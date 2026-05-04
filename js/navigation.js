@@ -39,6 +39,16 @@ export function initNavigation(sceneChangeCallback) {
 
   // Keyboard navigation
   document.addEventListener('keydown', handleKeyboard);
+  // If the page was loaded with a ?scene= query param, initialize internal index
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const parsed = Number.parseInt(params.get('scene') || '0', 10);
+    if (Number.isFinite(parsed)) {
+      currentSceneIndex = Math.max(0, Math.min(parsed, MAX_SCENES - 1));
+    }
+  } catch (e) {
+    // ignore
+  }
 
   updateNavButtonStates();
   console.log('Navigation initialized with touch support');
@@ -59,6 +69,11 @@ const handleKeyboard = debounce((event) => {
  * Go to next scene
  */
 export function goToNextScene() {
+  if (currentSceneIndex === 5) {
+    window.location.href = '/closing.html';
+    return;
+  }
+
   if (currentSceneIndex >= MAX_SCENES - 1) return;
   goToScene(currentSceneIndex + 1);
 }
@@ -71,7 +86,10 @@ export function goToPreviousScene() {
     window.location.href = '/';
     return;
   }
-  if (isNavigating) return;
+  if (currentSceneIndex === 5) {
+    window.location.href = '/experience.html?scene=4';
+    return;
+  }
   goToScene(currentSceneIndex - 1);
 }
 
@@ -94,6 +112,14 @@ export function goToScene(sceneIndex) {
   setTimeout(() => {
     isNavigating = false;
   }, 1000);
+}
+
+/**
+ * Sync the internal scene index without triggering navigation.
+ */
+export function setCurrentSceneIndex(sceneIndex) {
+  currentSceneIndex = Math.max(0, Math.min(sceneIndex, MAX_SCENES - 1));
+  updateNavButtonStates();
 }
 
 /**

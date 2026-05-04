@@ -1,51 +1,27 @@
+/**
+ * js/experience-r3f.jsx
+ * * High-Quality Unified UI Layer.
+ * The 3D Canvas has been removed to resolve the "Ghost Layer" camera conflict.
+ * Interactive vehicles are now rendered directly in three-init.js for perfect depth and lighting.
+ */
+
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import { Canvas, extend, useFrame, useThree } from '@react-three/fiber';
-import { OrbitControls as ThreeOrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { setExternalThreeContext } from './three-init.js';
-import FlashEffect from './FlashEffect.jsx';
-import Jeep from './Jeep.jsx';
-import MilitaryTruck from './MilitaryTruck.jsx';
-import SceneStateBridge from './SceneStateBridge.jsx';
 import { closeDialogueOverlay, useSceneState } from './sceneState.js';
 
-extend({ OrbitControls: ThreeOrbitControls });
-
-function SceneControls() {
-  const controlsRef = React.useRef();
-  const { camera, gl } = useThree();
-
-  useFrame(() => {
-    if (controlsRef.current) {
-      controlsRef.current.update();
-    }
-  });
-
-  return (
-    <orbitControls
-      ref={controlsRef}
-      args={[camera, gl.domElement]}
-      enableDamping
-      dampingFactor={0.08}
-      enablePan
-      enableZoom
-      enableRotate
-      minDistance={3}
-      maxDistance={28}
-      target={[0, 1.4, -12]}
-    />
-  );
-}
-
-function ExperienceCanvas() {
+function ExperienceUI() {
   const sceneState = useSceneState();
-  const currentSceneIndex = sceneState.currentSceneIndex;
   const [dialogueLineIndex, setDialogueLineIndex] = React.useState(0);
 
+  // Check if we're in static mode (Scene 5)
+  const isStaticMode = sceneState.currentSceneIndex === 5;
+
+  // Interaction State
   const hasSelection = sceneState.selectedPersonId !== null;
   const hasHover = sceneState.hoveredPersonId !== null;
   const dialogueVisible = hasSelection || hasHover;
 
+  // Dialogue Content Logic (Unchanged to preserve your original "Feel")
   const selectedDialogueLines = React.useMemo(() => {
     if (!hasSelection || !sceneState.selectedDialogueText) {
       return [];
@@ -57,6 +33,7 @@ function ExperienceCanvas() {
       .filter(Boolean);
   }, [hasSelection, sceneState.selectedDialogueText]);
 
+  // Reset paging when selection changes
   React.useEffect(() => {
     setDialogueLineIndex(0);
   }, [sceneState.selectedPersonId, sceneState.selectedDialogueText]);
@@ -65,240 +42,245 @@ function ExperienceCanvas() {
   const safeDialogueIndex = selectedDialogueLines.length > 0
     ? Math.min(dialogueLineIndex, selectedDialogueLines.length - 1)
     : 0;
+  
   const dialogueText = hasSelection
     ? (selectedDialogueLines[safeDialogueIndex] || '...')
     : 'hear my voice! Click on me.';
 
+  // Sync body classes for CSS transitions and mode detection
   React.useEffect(() => {
-    if (typeof document === 'undefined') {
-      return;
-    }
-
-    document.body.classList.toggle('dialogue-active', dialogueVisible);
-
+    if (typeof document === 'undefined') return;
+    document.body.classList.toggle('dialogue-active', dialogueVisible && !isStaticMode);
+    document.body.classList.toggle('static-mode', isStaticMode);
     return () => {
       document.body.classList.remove('dialogue-active');
+      document.body.classList.remove('static-mode');
     };
-  }, [dialogueVisible]);
+  }, [dialogueVisible, isStaticMode]);
+
+  // Setup dragging for widgets (Scene 5 static mode only)
+  React.useEffect(() => {
+    if (!isStaticMode || typeof document === 'undefined') return;
+
+    const metricsWidget = document.getElementById('metrics-widget');
+    const liveTimeWidget = document.getElementById('live-time-widget');
+    
+    const widgets = [metricsWidget, liveTimeWidget].filter(Boolean);
+    
+    if (widgets.length === 0) return;
+
+    // Store drag state
+    let dragState = null;
+
+    const setupDrag = (widget) => {
+      const handleMouseDown = (e) => {
+        if (e.button !== 0) return; // Only left mouse button
+        dragState = {
+          widget,
+          startX: e.clientX,
+          startY: e.clientY,
+          elementX: widget.offsetLeft,
+          elementY: widget.offsetTop
+        };
+        widget.classList.add('dragging');
+      };
+
+      const handleTouchStart = (e) => {
+        const touch = e.touches[0];
+        dragState = {
+          widget,
+          startX: touch.clientX,
+          startY: touch.clientY,
+          elementX: widget.offsetLeft,
+          elementY: widget.offsetTop
+        };
+        widget.classList.add('dragging');
+      };
+
+      const handleMouseMove = (e) => {
+        if (!dragState || dragState.widget !== widget) return;
+        const deltaX = e.clientX - dragState.startX;
+        const deltaY = e.clientY - dragState.startY;
+        widget.style.left = (dragState.elementX + deltaX) + 'px';
+        widget.style.top = (dragState.elementY + deltaY) + 'px';
+        widget.style.right = 'auto';
+      };
+
+      const handleTouchMove = (e) => {
+        if (!dragState || dragState.widget !== widget) return;
+        const touch = e.touches[0];
+        const deltaX = touch.clientX - dragState.startX;
+        const deltaY = touch.clientY - dragState.startY;
+        widget.style.left = (dragState.elementX + deltaX) + 'px';
+        widget.style.top = (dragState.elementY + deltaY) + 'px';
+        widget.style.right = 'auto';
+      };
+
+      const handleEnd = () => {
+        if (dragState?.widget === widget) {
+          dragState = null;
+          widget.classList.remove('dragging');
+        }
+      };
+
+      widget.addEventListener('mousedown', handleMouseDown);
+      widget.addEventListener('touchstart', handleTouchStart);
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('touchmove', handleTouchMove);
+      document.addEventListener('mouseup', handleEnd);
+      document.addEventListener('touchend', handleEnd);
+
+      return () => {
+        widget.removeEventListener('mousedown', handleMouseDown);
+        widget.removeEventListener('touchstart', handleTouchStart);
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('touchmove', handleTouchMove);
+        document.removeEventListener('mouseup', handleEnd);
+        document.removeEventListener('touchend', handleEnd);
+      };
+    };
+
+    const cleanups = widgets.map(setupDrag);
+    return () => cleanups.forEach(cleanup => cleanup?.());
+  }, [isStaticMode]);
 
   function goToNextDialogueLine() {
-    if (selectedDialogueLines.length < 2) {
-      return;
-    }
-
+    if (selectedDialogueLines.length < 2) return;
     setDialogueLineIndex((prev) => (prev + 1) % selectedDialogueLines.length);
   }
 
   function goToPreviousDialogueLine() {
-    if (selectedDialogueLines.length < 2) {
-      return;
-    }
-
+    if (selectedDialogueLines.length < 2) return;
     setDialogueLineIndex((prev) => (prev - 1 + selectedDialogueLines.length) % selectedDialogueLines.length);
   }
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-      <div
-        style={{
-          position: 'fixed',
-          top: '8vh',
-          left: '50%',
-          transform: dialogueVisible ? 'translateX(-50%) translateY(0)' : 'translateX(-50%) translateY(-8px)',
-          width: 'min(78vw, 980px)',
-          minHeight: '92px',
-          padding: '18px 26px',
-          borderRadius: '22px',
-          background: 'rgba(12, 16, 20, 0.72)',
-          border: '1px solid rgba(255,255,255,0.18)',
-          boxShadow: '0 24px 80px rgba(0,0,0,0.35)',
-          color: '#f4efe6',
-          fontSize: 'clamp(22px, 2.4vw, 34px)',
-          fontWeight: 700,
-          letterSpacing: '0.03em',
-          textAlign: 'center',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          opacity: dialogueVisible ? 1 : 0,
-          pointerEvents: 'none',
-          zIndex: 20,
-          transition: 'opacity 180ms ease, transform 180ms ease'
-        }}
-      >
-        <button
-          type="button"
-          onClick={closeDialogueOverlay}
-          aria-label="Close dialogue"
+    <div style={{ position: 'relative', width: '100%', height: '100%', pointerEvents: 'none' }}>
+      {/* STANDARD DIALOGUE (Hidden in static mode) */}
+      {!isStaticMode && (
+        <div
           style={{
-            position: 'absolute',
-            top: '10px',
-            right: '12px',
-            border: '1px solid rgba(255,255,255,0.25)',
-            background: 'rgba(255,255,255,0.1)',
+            position: 'fixed',
+            top: '8vh',
+            left: '50%',
+            transform: dialogueVisible ? 'translateX(-50%) translateY(0)' : 'translateX(-50%) translateY(-8px)',
+            width: 'min(78vw, 980px)',
+            minHeight: '92px',
+            padding: '18px 26px',
+            borderRadius: '22px',
+            background: 'rgba(12, 16, 20, 0.85)',
+            backdropFilter: 'blur(10px)',
+            border: '1px solid rgba(255,255,255,0.18)',
+            boxShadow: '0 24px 80px rgba(0,0,0,0.35)',
             color: '#f4efe6',
-            borderRadius: '10px',
-            width: '34px',
-            height: '34px',
-            fontSize: '20px',
-            lineHeight: 1,
-            cursor: 'pointer',
-            pointerEvents: 'auto',
-            display: dialogueVisible ? 'inline-flex' : 'none',
+            fontSize: 'clamp(22px, 2.4vw, 34px)',
+            fontWeight: 700,
+            letterSpacing: '0.03em',
+            textAlign: 'center',
+            display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center'
+            justifyContent: 'center',
+            opacity: dialogueVisible ? 1 : 0,
+            pointerEvents: dialogueVisible ? 'auto' : 'none', 
+            zIndex: 9999,
+            transition: 'opacity 180ms ease, transform 180ms ease'
           }}
         >
-          X
-        </button>
+          <button
+            type="button"
+            onClick={closeDialogueOverlay}
+            aria-label="Close dialogue"
+            style={{
+              position: 'absolute',
+              top: '10px',
+              right: '12px',
+              border: '1px solid rgba(255,255,255,0.25)',
+              background: 'rgba(255,255,255,0.1)',
+              color: '#f4efe6',
+              borderRadius: '10px',
+              width: '34px',
+              height: '34px',
+              fontSize: '20px',
+              lineHeight: 1,
+              cursor: 'pointer',
+              pointerEvents: 'auto',
+              display: dialogueVisible ? 'inline-flex' : 'none',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+          >
+            X
+          </button>
 
-        <div style={{ display: 'flex', flexDirection: 'column', width: '100%', alignItems: 'center', gap: '10px', paddingRight: '44px' }}>
-          <span style={{ whiteSpace: 'pre-line', width: '100%' }}>{dialogueText}</span>
+          <div style={{ display: 'flex', flexDirection: 'column', width: '100%', alignItems: 'center', gap: '10px', paddingRight: '44px' }}>
+            <span style={{ whiteSpace: 'pre-line', width: '100%' }}>{dialogueText}</span>
 
-          {hasPagedDialogue && (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', width: '100%' }}>
-              <button
-                type="button"
-                onClick={goToPreviousDialogueLine}
-                aria-label="Previous dialogue"
-                style={{
-                  border: '1px solid rgba(255,255,255,0.22)',
-                  background: 'rgba(255,255,255,0.08)',
-                  color: '#f4efe6',
-                  borderRadius: '10px',
-                  width: '34px',
-                  height: '34px',
-                  fontSize: '18px',
-                  lineHeight: 1,
-                  cursor: 'pointer',
-                  pointerEvents: 'auto',
-                  flexShrink: 0
-                }}
-              >
-                {'<'}
-              </button>
+            {hasPagedDialogue && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', width: '100%' }}>
+                <button
+                  type="button"
+                  onClick={goToPreviousDialogueLine}
+                  aria-label="Previous dialogue"
+                  style={navButtonStyle}
+                >
+                  {'<'}
+                </button>
 
-              <button
-                type="button"
-                onClick={goToNextDialogueLine}
-                aria-label="Next dialogue"
-                style={{
-                  border: '1px solid rgba(255,255,255,0.22)',
-                  background: 'rgba(255,255,255,0.08)',
-                  color: '#f4efe6',
-                  borderRadius: '10px',
-                  width: '34px',
-                  height: '34px',
-                  fontSize: '18px',
-                  lineHeight: 1,
-                  cursor: 'pointer',
-                  pointerEvents: 'auto',
-                  flexShrink: 0
-                }}
-              >
-                {'>'}
-              </button>
-            </div>
-          )}
+                <button
+                  type="button"
+                  onClick={goToNextDialogueLine}
+                  aria-label="Next dialogue"
+                  style={navButtonStyle}
+                >
+                  {'>'}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
-
-    <Canvas
-      id="r3f-overlay-canvas"
-      camera={{ position: [0, 2, 5], fov: 60 }}
-      dpr={[1, 1.25]}
-      gl={{ alpha: true, clearColor: [0, 0, 0, 0] }}
-      onCreated={({ scene, camera, gl }) => {
-        setExternalThreeContext({
-          scene,
-          camera,
-          renderer: gl,
-          canvas: gl.domElement
-        });
-
-        if (window.__resolveR3FBridgeReady) {
-          window.__resolveR3FBridgeReady();
-          window.__resolveR3FBridgeReady = null;
-        }
-      }}
-      style={{ width: '100%', height: '100%', display: 'block', touchAction: 'none', background: 'transparent' }}
-    >
-      <SceneControls />
-      <FlashEffect />
-      {currentSceneIndex === 2 && (
-        <>
-          <MilitaryTruck 
-            position={[-8.5, -0.16, -21.6]} 
-            moving 
-            speed={0.1} 
-            maxAdvance={2.2}
-            dialogueId="scene2-truck-1"
-            dialogue={[
-              'Military trucks advanced on the protest site.',
-              'Heavy vehicles symbolized state power overwhelming civilian resistance.'
-            ]}
-          />
-          <MilitaryTruck 
-            position={[0, -0.16, -20.8]}
-            dialogueId="scene2-truck-2"
-            dialogue={[
-              'The military occupied the strategic protesting area.',
-              'Development projects were protected by overwhelming military presence.'
-            ]}
-          />
-          <MilitaryTruck 
-            position={[8.5, -0.16, -21.3]}
-            dialogueId="scene2-truck-3"
-            dialogue={[
-              'Armed forces blockaded civilian access to the canal.',
-              'State machinery was deployed to suppress dissent.'
-            ]}
-          />
-
-          <Jeep 
-            position={[-13.5, -0.18, -13.6]}
-            dialogueId="scene2-jeep-1"
-            dialogue={[
-              'Police vehicles patrolled to intimidate protesters.',
-              'Authorities enforced the project through visible occupation.'
-            ]}
-          />
-          <Jeep 
-            position={[13.2, -0.18, -13.1]}
-            dialogueId="scene2-jeep-2"
-            dialogue={[
-              'Security forces blocked escape routes.',
-              'The police maintained control over the protest space.'
-            ]}
-          />
-          <Jeep 
-            position={[9.5, -0.18, -21.8]} 
-            moving 
-            speed={0.32} 
-            stopZ={-14.2}
-            dialogueId="scene2-jeep-3"
-            dialogue={[
-              'Mobile police units moved to contain the demonstration.',
-              'Armed police enforced order through presence and readiness.'
-            ]}
-          />
-        </>
       )}
 
-      <SceneStateBridge frontLineZ={-14} />
-    </Canvas>
+      {/* FORENSIC GRID (Scene 5 Static Mode) */}
+      {isStaticMode && (
+        <div className="forensic-grid">
+          <div className="forensic-card" style={{ animationDelay: '0.2s' }}>
+            <h3>Ecological Rupture</h3>
+            <p>The 240km canal has permanently severed the "Sponge" effect, causing a 15% drop in regional humidity.</p>
+          </div>
+          
+          <div className="forensic-card" style={{ animationDelay: '0.4s' }}>
+            <h3>Forced Stagnation</h3>
+            <p>Trapped water bodies now cluster disease vectors, with schistosomiasis rates exceeding 60% in local cattle herds.</p>
+          </div>
+
+          <div className="forensic-card" style={{ animationDelay: '0.6s' }}>
+            <h3>Audit Conclusion</h3>
+            <p>This infrastructure is not a failure of engineering, but a successful geometry of extraction and displacement.</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
+// Reusable style for navigation arrows
+const navButtonStyle = {
+  border: '1px solid rgba(255,255,255,0.22)',
+  background: 'rgba(255,255,255,0.08)',
+  color: '#f4efe6',
+  borderRadius: '10px',
+  width: '34px',
+  height: '34px',
+  fontSize: '18px',
+  lineHeight: 1,
+  cursor: 'pointer',
+  pointerEvents: 'auto',
+  flexShrink: 0
+};
+
+// Mount the UI
 const rootEl = document.getElementById('r3f-canvas-root');
 if (rootEl) {
-  if (!window.__r3fBridgeReady) {
-    window.__r3fBridgeReady = new Promise((resolve) => {
-      window.__resolveR3FBridgeReady = resolve;
-    });
-  }
-
   const root = createRoot(rootEl);
-  root.render(<ExperienceCanvas />);
+  root.render(<ExperienceUI />);
 }

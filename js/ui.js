@@ -5,6 +5,7 @@
 
 let isPanelOpen = false;
 let dragGesture = null;
+let widgetDragState = null;
 
 /**
  * Initialize UI components
@@ -17,6 +18,8 @@ export function initUI() {
   if (sceneLabel) {
     sceneLabel.addEventListener('click', openTextPanel);
   }
+
+  setupStaticWidgetDragging();
 }
 
 /**
@@ -45,6 +48,45 @@ export function setupDragUpListener() {
   const closeBtn = document.getElementById('close-panel');
   const sceneLabel = document.getElementById('scene-label');
   const textPanel = document.getElementById('text-panel');
+
+  if (sceneLabel && !sceneLabel.querySelector('.scene-label-hit-area')) {
+    sceneLabel.style.position = 'fixed';
+    sceneLabel.style.overflow = 'hidden';
+
+    const hitArea = document.createElement('button');
+    hitArea.type = 'button';
+    hitArea.className = 'scene-label-hit-area';
+    hitArea.setAttribute('aria-label', 'Open text panel');
+    hitArea.style.position = 'absolute';
+    hitArea.style.inset = '0';
+    hitArea.style.width = '100%';
+    hitArea.style.height = '100%';
+    hitArea.style.border = '0';
+    hitArea.style.margin = '0';
+    hitArea.style.padding = '0';
+    hitArea.style.background = 'transparent';
+    hitArea.style.cursor = 'pointer';
+    hitArea.style.zIndex = '1';
+    hitArea.style.pointerEvents = 'auto';
+
+    hitArea.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openTextPanel();
+    });
+    hitArea.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openTextPanel();
+    });
+    hitArea.addEventListener('pointerup', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openTextPanel();
+    });
+
+    sceneLabel.insertBefore(hitArea, sceneLabel.firstChild);
+  }
 
   const clearDragGesture = () => {
     dragGesture = null;
@@ -116,6 +158,37 @@ export function setupDragUpListener() {
     });
     sceneLabel.addEventListener('touchend', (e) => {
       e.stopPropagation();
+      openTextPanel();
+    });
+  }
+
+  const openPanelFromLabelBounds = (event) => {
+    if (isPanelOpen || !sceneLabel) {
+      return;
+    }
+
+    const rect = sceneLabel.getBoundingClientRect();
+    const point = event.touches && event.touches.length > 0 ? event.touches[0] : event;
+
+    if (
+      point.clientX >= rect.left &&
+      point.clientX <= rect.right &&
+      point.clientY >= rect.top &&
+      point.clientY <= rect.bottom
+    ) {
+      openTextPanel();
+    }
+  };
+
+  document.addEventListener('pointerup', openPanelFromLabelBounds, true);
+  document.addEventListener('click', openPanelFromLabelBounds, true);
+
+  // Clicking the panel itself should also open it
+  if (textPanel) {
+    textPanel.addEventListener('click', () => {
+      openTextPanel();
+    });
+    textPanel.addEventListener('touchend', () => {
       openTextPanel();
     });
   }
@@ -205,11 +278,23 @@ export function setupMetricsToggle() {
   const metricsClose = document.getElementById('metrics-close');
   const metricsCompact = document.getElementById('metrics-compact');
   const metricsExpanded = document.getElementById('metrics-expanded');
+  const metricsHint = document.getElementById('metrics-hint');
 
   if (!metricsWidget) {
     console.warn('Metrics widget not found');
     return;
   }
+
+  // Show/hide hint based on static mode
+  const updateHintVisibility = () => {
+    const isStatic = document.body.classList.contains('static-mode');
+    if (metricsHint) {
+      metricsHint.style.display = isStatic ? 'block' : 'none';
+    }
+  };
+
+  // Show hint immediately if already in static mode
+  updateHintVisibility();
 
   // Helper function to handle toggle on click and touch
   function handleToggle(e) {
@@ -220,8 +305,14 @@ export function setupMetricsToggle() {
     toggleMetrics();
   }
 
-  // Toggle expand/collapse on widget click
-  metricsWidget.addEventListener('click', handleToggle);
+  // Toggle expand/collapse on widget click - ensure it works even in static mode
+  metricsWidget.addEventListener('click', (e) => {
+    // In static mode, check if we're dragging; if so, don't toggle
+    if (document.body.classList.contains('static-mode') && widgetDragState?.dragging) {
+      return;
+    }
+    handleToggle(e);
+  });
   metricsWidget.addEventListener('touchend', handleToggle);
 
   // Close button - click and touch
@@ -254,7 +345,306 @@ export function setupMetricsToggle() {
     }
   });
 
-  console.log('Metrics toggle initialized with touch support');
+  // Update hint visibility when static mode changes
+  const observer = new MutationObserver(() => {
+    updateHintVisibility();
+  });
+  observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+
+  console.log('Metrics toggle initialized with touch support and static mode awareness');
+}
+
+/**
+ * Allow widgets to be dragged only while the static scene is active.
+ */
+function setupStaticWidgetDragging() {
+  const widgets = [
+    document.getElementById('metrics-widget'),
+    document.getElementById('live-time-widget')
+  ].filter(Boolean);
+
+  if (!widgets.length) {
+    return;
+  }
+
+  const isStaticMode = () => {
+    if (document.body.classList.contains('static-mode')) {
+      return true;
+    }
+
+    const scene5Static = document.getElementById('scene5-static');
+    if (!scene5Static) {
+      return false;
+    }
+
+    return getComputedStyle(scene5Static).display !== 'none';
+  };
+
+  const getPointFromEvent = (event) => {
+    if (event.touches && event.touches.length > 0) {
+      return event.touches[0];
+    }
+    if (event.changedTouches && event.changedTouches.length > 0) {
+      return event.changedTouches[0];
+    }
+    return event;
+  };
+
+  const endDrag = () => {
+    if (!widgetDragState) {
+      return;
+    }
+
+    const draggedWidget = widgetDragState.widget;
+    if (draggedWidget) {
+      draggedWidget.classList.remove('dragging');
+    }
+
+    widgetDragState = null;
+  };
+
+  const onPointerMove = (event) => {
+    if (!widgetDragState || event.pointerId !== widgetDragState.pointerId) {
+      return;
+    }
+
+    const deltaX = event.clientX - widgetDragState.startX;
+    const deltaY = event.clientY - widgetDragState.startY;
+
+    if (!widgetDragState.dragging) {
+      if (Math.abs(deltaX) < 4 && Math.abs(deltaY) < 4) {
+        return;
+      }
+
+      widgetDragState.dragging = true;
+      widgetDragState.widget.classList.add('dragging');
+      widgetDragState.widget.style.left = `${widgetDragState.startLeft}px`;
+      widgetDragState.widget.style.top = `${widgetDragState.startTop}px`;
+      widgetDragState.widget.style.right = 'auto';
+      widgetDragState.widget.style.bottom = 'auto';
+    }
+
+    widgetDragState.widget.style.left = `${widgetDragState.startLeft + deltaX}px`;
+    widgetDragState.widget.style.top = `${widgetDragState.startTop + deltaY}px`;
+  };
+
+  const onMouseMove = (event) => {
+    if (!widgetDragState || widgetDragState.inputType !== 'mouse') {
+      return;
+    }
+
+    const deltaX = event.clientX - widgetDragState.startX;
+    const deltaY = event.clientY - widgetDragState.startY;
+
+    if (!widgetDragState.dragging) {
+      if (Math.abs(deltaX) < 4 && Math.abs(deltaY) < 4) {
+        return;
+      }
+
+      widgetDragState.dragging = true;
+      widgetDragState.widget.classList.add('dragging');
+      widgetDragState.widget.style.left = `${widgetDragState.startLeft}px`;
+      widgetDragState.widget.style.top = `${widgetDragState.startTop}px`;
+      widgetDragState.widget.style.right = 'auto';
+      widgetDragState.widget.style.bottom = 'auto';
+    }
+
+    widgetDragState.widget.style.left = `${widgetDragState.startLeft + deltaX}px`;
+    widgetDragState.widget.style.top = `${widgetDragState.startTop + deltaY}px`;
+  };
+
+  const onTouchMove = (event) => {
+    if (!widgetDragState || widgetDragState.inputType !== 'touch') {
+      return;
+    }
+
+    const point = getPointFromEvent(event);
+    if (!point) {
+      return;
+    }
+
+    const deltaX = point.clientX - widgetDragState.startX;
+    const deltaY = point.clientY - widgetDragState.startY;
+
+    if (!widgetDragState.dragging) {
+      if (Math.abs(deltaX) < 4 && Math.abs(deltaY) < 4) {
+        return;
+      }
+
+      widgetDragState.dragging = true;
+      widgetDragState.widget.classList.add('dragging');
+      widgetDragState.widget.style.left = `${widgetDragState.startLeft}px`;
+      widgetDragState.widget.style.top = `${widgetDragState.startTop}px`;
+      widgetDragState.widget.style.right = 'auto';
+      widgetDragState.widget.style.bottom = 'auto';
+    }
+
+    widgetDragState.widget.style.left = `${widgetDragState.startLeft + deltaX}px`;
+    widgetDragState.widget.style.top = `${widgetDragState.startTop + deltaY}px`;
+    event.preventDefault();
+  };
+
+  const onPointerUp = (event) => {
+    if (!widgetDragState || event.pointerId !== widgetDragState.pointerId) {
+      return;
+    }
+
+    if (widgetDragState.dragging) {
+      widgetDragState.widget.dataset.suppressNextClick = 'true';
+    }
+
+    widgetDragState.widget.releasePointerCapture?.(event.pointerId);
+
+    endDrag();
+  };
+
+  const onMouseUp = () => {
+    if (!widgetDragState || widgetDragState.inputType !== 'mouse') {
+      return;
+    }
+
+    if (widgetDragState.dragging) {
+      widgetDragState.widget.dataset.suppressNextClick = 'true';
+    }
+
+    endDrag();
+  };
+
+  const onTouchEnd = () => {
+    if (!widgetDragState || widgetDragState.inputType !== 'touch') {
+      return;
+    }
+
+    if (widgetDragState.dragging) {
+      widgetDragState.widget.dataset.suppressNextClick = 'true';
+    }
+
+    endDrag();
+  };
+
+  widgets.forEach((widget) => {
+    widget.addEventListener('pointerdown', (event) => {
+      if (!isStaticMode()) {
+        return;
+      }
+
+      if (widget === document.getElementById('metrics-widget') && event.target.closest('#metrics-close')) {
+        return;
+      }
+
+      // Get current CSS left/top values, accounting for scaled widgets
+      const computedStyle = getComputedStyle(widget);
+      let startLeft = parseFloat(computedStyle.left) || 0;
+      let startTop = parseFloat(computedStyle.top) || 0;
+
+      // If widget uses right/bottom instead, calculate left/top from viewport
+      if (widget.style.right && !widget.style.left) {
+        const rect = widget.getBoundingClientRect();
+        startLeft = rect.left / parseFloat(computedStyle.scale || 1);
+      }
+      if (widget.style.bottom && !widget.style.top) {
+        const rect = widget.getBoundingClientRect();
+        startTop = rect.top / parseFloat(computedStyle.scale || 1);
+      }
+
+      widgetDragState = {
+        widget,
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        startLeft: startLeft,
+        startTop: startTop,
+        dragging: false,
+        inputType: 'pointer',
+      };
+
+      widget.dataset.suppressNextClick = 'false';
+
+      widget.setPointerCapture?.(event.pointerId);
+    });
+
+    widget.addEventListener('mousedown', (event) => {
+      if (!isStaticMode() || event.button !== 0) {
+        return;
+      }
+
+      if (widget === document.getElementById('metrics-widget') && event.target.closest('#metrics-close')) {
+        return;
+      }
+
+      const computedStyle = getComputedStyle(widget);
+      const startLeft = parseFloat(computedStyle.left) || widget.getBoundingClientRect().left;
+      const startTop = parseFloat(computedStyle.top) || widget.getBoundingClientRect().top;
+
+      widgetDragState = {
+        widget,
+        startX: event.clientX,
+        startY: event.clientY,
+        startLeft,
+        startTop,
+        dragging: false,
+        inputType: 'mouse',
+      };
+
+      widget.dataset.suppressNextClick = 'false';
+      event.preventDefault();
+    });
+
+    widget.addEventListener('touchstart', (event) => {
+      if (!isStaticMode()) {
+        return;
+      }
+
+      if (widget === document.getElementById('metrics-widget') && event.target.closest('#metrics-close')) {
+        return;
+      }
+
+      const point = getPointFromEvent(event);
+      if (!point) {
+        return;
+      }
+
+      const computedStyle = getComputedStyle(widget);
+      const startLeft = parseFloat(computedStyle.left) || widget.getBoundingClientRect().left;
+      const startTop = parseFloat(computedStyle.top) || widget.getBoundingClientRect().top;
+
+      widgetDragState = {
+        widget,
+        startX: point.clientX,
+        startY: point.clientY,
+        startLeft,
+        startTop,
+        dragging: false,
+        inputType: 'touch',
+      };
+
+      widget.dataset.suppressNextClick = 'false';
+    }, { passive: false });
+
+    widget.addEventListener('click', (event) => {
+      if (!isStaticMode()) {
+        return;
+      }
+
+      if (widget.dataset.suppressNextClick === 'true') {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        widget.dataset.suppressNextClick = 'false';
+      }
+    });
+  });
+
+  document.addEventListener('pointermove', onPointerMove);
+  document.addEventListener('pointerup', onPointerUp);
+  document.addEventListener('pointercancel', onPointerUp);
+  document.addEventListener('mousemove', onMouseMove);
+  document.addEventListener('mouseup', onMouseUp);
+  document.addEventListener('touchmove', onTouchMove, { passive: false });
+  document.addEventListener('touchend', onTouchEnd);
+  document.addEventListener('touchcancel', onTouchEnd);
+
+  console.log('Static widget dragging initialized');
 }
 
 /**

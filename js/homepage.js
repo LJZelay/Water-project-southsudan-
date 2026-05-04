@@ -6,7 +6,7 @@ function handleGetLearning() {
     document.getElementById('three-canvas').style.filter = 'blur(15px) grayscale(1)';
     
     setTimeout(() => {
-        window.location.href = '/experience.html?scene=0';
+        window.location.href = '/coming-soon.html';
     }, 1000);
 }
 

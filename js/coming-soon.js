@@ -13,10 +13,6 @@ function isReloadNavigation() {
     return false;
 }
 
-if (isReloadNavigation()) {
-    window.location.replace('/');
-}
-
 // --- 3D SETUP ---
 const canvas = document.getElementById('three-canvas');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -107,4 +103,32 @@ window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// --- CARD INTERACTIONS ---
+// Initialize cards to start collapsed (preview mode)
+document.addEventListener('DOMContentLoaded', () => {
+    const introDetails = document.getElementById('intro-details');
+    const navDetails = document.getElementById('nav-details');
+
+    // Ensure both details start closed (preview mode)
+    if (introDetails) {
+        introDetails.open = false;
+    }
+    if (navDetails) {
+        navDetails.open = false;
+    }
+
+    // Handle summary clicks to toggle details
+    const summaries = document.querySelectorAll('.toc-summary');
+    summaries.forEach(summary => {
+        // Make sure click events on any child element toggle the details
+        summary.addEventListener('click', (e) => {
+            const details = summary.closest('.toc-expando');
+            if (details) {
+                e.preventDefault();
+                details.open = !details.open;
+            }
+        });
+    });
 });

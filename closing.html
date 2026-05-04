@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Victory ending page for The Jonglei Canal exhibition.">
+  <title>Thank You - Closing Scene</title>
+  <link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=Inter:wght@900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/closing.css">
+</head>
+<body>
+  <canvas id="three-canvas"></canvas>
+
+  <div id="ending-speech" class="ending-bubble">thank you for learning for us</div>
+
+  <div id="victory-overlay">
+    <div class="victory-banner">
+      <svg class="victory-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 2l2.9 6.2 6.8.6-5.1 4.4 1.6 6.7L12 16.6 5.8 20l1.6-6.7L2.3 8.8l6.8-.6L12 2z"></path>
+      </svg>
+      <span class="victory-text">MISSION COMPLETE // VICTORY UNLOCKED</span>
+    </div>
+
+    <div class="victory-stage">
+      <div class="victory-title-card">
+        <p class="victory-kicker">CLOSING SCENE</p>
+        <h1 class="victory-title">THANK YOU FOR LEARNING WITH US</h1>
+        <p class="victory-subtitle">The archive is complete. The characters are waving back, the cattle are still moving, and the story ends with a win screen instead of a warning.</p>
+      </div>
+
+      <div class="victory-actions">
+        <a href="/" class="victory-button victory-button-home">Return to Homepage</a>
+        <a href="/experience.html?scene=0" class="victory-button victory-button-scenes">Go Back to the Scenes</a>
+      </div>
+    </div>
+
+    <div class="footer-hint">END SCREEN // SOUTH SUDAN ARCHIVE // THANK YOU FOR PLAYING</div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+      }
+    }
+  </script>
+
+  <script type="module" src="/js/closing.js"></script>
+</body>
+</html>

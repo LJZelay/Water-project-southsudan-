@@ -5,7 +5,7 @@
 
 import { scenes, getScene } from './scenes.js';
 import { initThreeJS, loadScene, updateFallbackImage, isSceneTransitioning, cleanupThreeJS, applyLiveWeatherToScene } from './three-init.js';
-import { initNavigation, getCurrentSceneIndex, cleanupNavigation } from './navigation.js';
+import { initNavigation, getCurrentSceneIndex, cleanupNavigation, setCurrentSceneIndex } from './navigation.js';
 import { setSceneState } from './sceneState.js';
 import { initUI, updatePanelForScene, setupDragUpListener, setupMetricsToggle, closeTextPanel } from './ui.js';
 import { isWebGLSupported } from './utils.js';
@@ -39,10 +39,6 @@ function isReloadNavigation() {
   }
 
   return false;
-}
-
-if (isReloadNavigation()) {
-  window.location.replace('/');
 }
 
 function getInitialSceneIndex() {
@@ -139,6 +135,41 @@ function setClockTimezone(timezone) {
 async function initApp() {
   console.log('Initializing Jonglei Canal Exhibition...');
 
+  // Determine initial scene early to apply static-mode class ASAP
+  const initialSceneIndex = getInitialSceneIndex();
+  if (initialSceneIndex === 5) {
+    document.body.classList.add('static-mode');
+    // Hide scene label and text panel immediately for scene 5
+    const sceneLabel = document.getElementById('scene-label');
+    const textPanel = document.getElementById('text-panel');
+    if (sceneLabel) sceneLabel.style.display = 'none';
+    if (textPanel) textPanel.style.display = 'none';
+    // Hide 3D canvas container
+    const canvasContainer = document.getElementById('canvas-container');
+    if (canvasContainer) canvasContainer.style.display = 'none';
+    // Show static scene immediately
+    const scene5Static = document.getElementById('scene5-static');
+    if (scene5Static) scene5Static.classList.remove('hidden');
+    
+    // Force apply static-mode styles to widgets immediately
+    const metricsWidget = document.getElementById('metrics-widget');
+    const liveTimeWidget = document.getElementById('live-time-widget');
+    if (metricsWidget) {
+      metricsWidget.style.opacity = '0.65';
+      metricsWidget.style.transform = 'scale(0.68)';
+      metricsWidget.style.cursor = 'grab';
+      metricsWidget.style.pointerEvents = 'auto';
+      metricsWidget.style.touchAction = 'none';
+    }
+    if (liveTimeWidget) {
+      liveTimeWidget.style.opacity = '0.65';
+      liveTimeWidget.style.transform = 'scale(0.68)';
+      liveTimeWidget.style.cursor = 'grab';
+      liveTimeWidget.style.pointerEvents = 'auto';
+      liveTimeWidget.style.touchAction = 'none';
+    }
+  }
+
   // Check WebGL support
   webglAvailable = isWebGLSupported();
   console.log('WebGL available:', webglAvailable);
@@ -177,7 +208,7 @@ async function initApp() {
   startLocalClock();
 
   // Load initial scene (scene 0 by default; supports ?scene=1, etc.)
-  onSceneChange(getInitialSceneIndex());
+  onSceneChange(initialSceneIndex);
 
   // Hydrate live APIs in background so scene renders immediately.
   initLiveApiData().catch((err) => {
@@ -198,6 +229,8 @@ function onSceneChange(sceneIndex) {
     console.log('Scene transition in progress; skipping navigation');
     return;
   }
+
+  setCurrentSceneIndex(sceneIndex);
 
   const sceneData = getScene(sceneIndex);
 
@@ -242,10 +275,27 @@ function onSceneChange(sceneIndex) {
 function applyScene5StaticMode(sceneIndex) {
   const canvasContainer = document.getElementById('canvas-container');
   const scene5Static = document.getElementById('scene5-static');
+  const sceneLabel = document.getElementById('scene-label');
+  const textPanel = document.getElementById('text-panel');
   const isScene5 = sceneIndex === 5;
 
   if (canvasContainer) {
     canvasContainer.style.display = isScene5 ? 'none' : '';
+  }
+
+  // Toggle static-mode class for CSS rules
+  document.body.classList.toggle('static-mode', isScene5);
+
+  // Make sure the collapsed label and drag-up panel are fully hidden when static scene is active.
+  if (sceneLabel) {
+    sceneLabel.style.display = isScene5 ? 'none' : '';
+  }
+  if (textPanel) {
+    textPanel.style.display = isScene5 ? 'none' : '';
+    // also ensure the panel is closed
+    textPanel.classList.remove('open');
+    document.body.classList.remove('text-panel-open');
+    // reset internal UI state by calling close logic if available (best-effort)
   }
 
   if (scene5Static) {
@@ -254,6 +304,13 @@ function applyScene5StaticMode(sceneIndex) {
     } else {
       scene5Static.classList.add('hidden');
     }
+  }
+
+  // Force-update metrics when entering static scene so live snapshot is visible
+  try {
+    updateMetrics(getScene(sceneIndex), livePayload);
+  } catch (err) {
+    // ignore if updateMetrics not available yet
   }
 }
 
@@ -360,9 +417,9 @@ function updateSceneLabel(sceneData) {
 
   labelTitle.textContent = sceneData.shortLabel;
   if (labelHint) {
-    const nextSceneName = sceneIndex === 0
-      ? scenes[1].title
-      : 'Coming Soon';
+    const nextSceneName = sceneIndex < scenes.length - 1
+      ? scenes[sceneIndex + 1].title
+      : 'Closing Scene';
     labelHint.textContent = `Click to read analysis • Next scene: ${nextSceneName}`;
   }
 }
